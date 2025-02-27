@@ -1,66 +1,66 @@
-\`\`\`markdown
+# 🚀 Telegram Uploader Bot - (Version 1)
 
-# 🚀 تلگرام آپلودر بات - Telegram Uploader Bot (ورژن 1)
+[![License: Attribution-NonCommercial-NoDerivatives 4.0 International](about:sanitized)](https://www.google.com/url?sa=E&source=gmail&q=https://creativecommons.org/licenses/by-nc-nd/4.0/)
 
-[![لایسنس: Attribution-NonCommercial-NoDerivatives 4.0 International](about:sanitized)](https://www.google.com/url?sa=E&source=gmail&q=https://creativecommons.org/licenses/by-nc-nd/4.0/)
+**Welcome to the Telegram Uploader Bot\!** 🤖
 
-**به ربات تلگرامی آپلودر خوش آمدید\!** 🤖
+This Telegram bot allows you to easily upload your files (photos, videos, documents, audio) and receive a direct download link. Developed in Python using the `Telebot` library, this source code is ideal for personal and non-commercial use.
 
-این ربات تلگرامی به شما کمک می‌کند تا به راحتی فایل‌های خود را (عکس، ویدیو، سند، صدا) آپلود کرده و لینک دانلود مستقیم دریافت کنید. این سورس به زبان پایتون و با استفاده از کتابخانه `Telebot` توسعه داده شده است و برای استفاده شخصی و غیرتجاری مناسب می‌باشد.
+**Key Feature:** This bot utilizes group storage, meaning it **doesn't consume any volume on your personal device or bot server**\! All uploaded files are stored in a designated Telegram group.
 
-## ✨ ویژگی‌های کلیدی
+## ✨ Key Features
 
-  * **آپلود آسان:** به سادگی فایل‌های خود را برای ربات ارسال کنید.
-  * **پشتیبانی از انواع رسانه:** عکس، ویدیو، سند و فایل‌های صوتی را آپلود کنید.
-  * **لینک دانلود مستقیم:** پس از آپلود موفقیت‌آمیز، یک لینک دانلود مستقیم و اختصاصی دریافت کنید.
-  * **حذف فایل:** فایل‌های آپلود شده را با استفاده از شناسه فایل (File ID) به راحتی حذف کنید.
-  * **تنظیم کپشن:** برای فایل‌های آپلود شده کپشن دلخواه تنظیم کنید.
-  * **پشتیبانی از چند زبان:** ربات به صورت پیش‌فرض از زبان فارسی و انگلیسی پشتیبانی می‌کند و به راحتی می‌توانید زبان‌های جدید اضافه کنید.
-  * **پنل مدیریت (Admin Panel):** امکانات مدیریتی برای کنترل ربات (آمار، وضعیت ربات، مسدود/رفع مسدودیت کاربر، ارسال پیام همگانی و ...) (در ورژن 1 برخی امکانات محدود است).
-  * **امنیت:** استفاده از توکن‌های امنیتی برای لینک‌های دانلود.
+  * **Easy Upload:** Simply send your files to the bot to upload.
+  * **Multi-Media Support:** Upload photos, videos, documents, and audio files.
+  * **Direct Download Link:** Get a unique, direct download link after successful upload.
+  * **File Deletion:** Easily delete uploaded files using their File ID.
+  * **Caption Setting:** Set a custom caption for your uploaded files.
+  * **Multi-Language Support:**  The bot supports Persian and English by default, with easy addition of new languages.
+  * **Admin Panel:** Management features to control the bot (statistics, bot status, ban/unban users, broadcast messages, etc.) (Some features are limited in Version 1).
+  * **Security:** Secure download links using security tokens.
 
-## ⚙️ نحوه استفاده
+## ⚙️ How to Use
 
-1.  ربات را استارت کنید (با ارسال دستور `/start`).
-2.  زبان ربات را از منوی اولیه انتخاب کنید.
-3.  از منوی اصلی ربات، دکمه "☁️ آپلود رسانه ☁️" را انتخاب کنید.
-4.  فایل (عکس، ویدیو، سند یا صدا) مورد نظر خود را برای ربات ارسال کنید.
-5.  پس از آپلود موفقیت‌آمیز، ربات یک پیام حاوی شناسه فایل (File ID) و لینک دانلود مستقیم برای شما ارسال خواهد کرد.
+1.  Start the bot by sending the `/start` command.
+2.  Choose your preferred language from the initial menu.
+3.  From the main menu, select the "☁️ Upload Media ☁️" button.
+4.  Send the file (photo, video, document, or audio) you wish to upload to the bot.
+5.  After successful upload, the bot will send you a message containing the File ID and a direct download link.
 
-### سایر دکمه‌های منوی اصلی
+### Other Main Menu Buttons
 
-  * **♻️ کپشن:** برای تنظیم یا تغییر کپشن پیش‌فرض فایل‌های آپلود شده.
-  * **🗑 حذف فایل:** برای حذف فایل‌های آپلود شده با استفاده از شناسه فایل (File ID).
-  * **🗣 پشتیبانی:** برای ارسال پیام به پشتیبانی ربات (مدیریت ربات).
-  * **⚙️ حساب کاربری:** مشاهده پروفایل کاربری شامل نام، شناسه کاربری و تعداد فایل‌های آپلود شده.
+  * **♻️ Caption:** Set or change the default caption for uploaded files.
+  * **🗑 Delete File:** Delete uploaded files using their File ID.
+  * **🗣 Support:** Send a message to the bot support (admin).
+  * **⚙️ Profile:** View your user profile, including name, user ID, and the number of uploaded files.
 
-## 🔑 پنل مدیریت (Admin Panel)
+## 🔑 Admin Panel
 
-برای دسترسی به پنل مدیریت، دستور `/panel` را برای ربات ارسال کنید. (فقط برای مدیر ربات با شناسه کاربری مشخص شده در سورس قابل دسترسی است.)
+To access the admin panel, send the command `/panel` to the bot. (Accessible only to the admin user ID specified in the source code.)
 
-### امکانات پنل مدیریت (ورژن 1 - محدود)
+### Admin Panel Features (Version 1 - Limited)
 
-  * **📊 آمار ربات:** مشاهده آمار کلی ربات شامل تعداد کاربران و وضعیت ربات (روشن/خاموش).
-  * **🚦 روشن/خاموش کردن ربات:** تغییر وضعیت ربات به روشن یا خاموش.
-  * **🚫 مسدود کردن کاربر:** مسدود کردن یک کاربر با استفاده از شناسه کاربری عددی.
-  * **✅ رفع مسدودیت کاربر:** رفع مسدودیت از یک کاربر مسدود شده با استفاده از شناسه کاربری عددی.
-  * **📢 ارسال پیام همگانی:** ارسال یک پیام متنی به تمامی کاربران ربات.
-  * **📤 فروارد همگانی:** فروارد یک پیام از طرف مدیر به تمامی کاربران ربات.
-  * **⚙️ تنظیمات بیشتر:**  (غیر فعال در ورژن 1 - در ورژن 2 فعال خواهد شد) - این دکمه در ورژن 1 فعال نیست و در ورژن 2 امکانات بیشتری برای تنظیمات ربات از این بخش قابل دسترسی خواهد بود.
+  * **📊 Bot Stats:** View overall bot statistics, including user count and bot status (On/Off).
+  * **🚦 Turn On/Off Bot:** Change the bot status to On or Off.
+  * **🚫 Ban User:** Ban a user using their numerical User ID.
+  * **✅ Unban User:** Unban a banned user using their numerical User ID.
+  * **📢 Broadcast Message:** Send a text message to all bot users.
+  * **📤 Forward Broadcast:** Forward a message from the admin to all bot users.
+  * **⚙️ More Settings:** (Inactive in Version 1 - will be active in Version 2) - This button is inactive in Version 1. Version 2 will include more bot settings options here.
 
-## 🌍 پشتیبانی از چند زبان
+## 🌍 Multi-Language Support
 
-ربات به صورت پیش‌فرض از دو زبان فارسی و انگلیسی پشتیبانی می‌کند. برای افزودن زبان‌های جدید یا ویرایش متن‌های موجود، مراحل زیر را دنبال کنید:
+The bot supports English and Persian languages by default. To add new languages or edit existing texts, follow these steps:
 
-1.  **فولدر `languages`:** در ریشه پروژه، یک فولدر با نام `languages` وجود دارد.
-2.  **فایل‌های زبان:** در این فولدر، فایل‌های `fa.json` (فارسی) و `en.json` (انگلیسی) قرار دارند. هر فایل `json` شامل متن‌های ربات برای یک زبان خاص است.
-3.  **افزودن زبان جدید:**
-      * یک فایل `json` جدید با نام کد زبان مورد نظر خود (مثلاً `es.json` برای زبان اسپانیایی) در فولدر `languages` ایجاد کنید.
-      * محتوای فایل‌های `fa.json` یا `en.json` را در فایل جدید کپی کنید.
-      * متن‌های کپی شده را به زبان جدید ترجمه کنید.
-      * کد زبان جدید و نام آن را به دیکشنری `LANGUAGES` در فایل اصلی سورس (`uploader_bot.py`) اضافه کنید.
+1.  **`languages` Folder:** In the project root, there is a folder named `languages`.
+2.  **Language Files:** This folder contains `fa.json` (Persian) and `en.json` (English) files. Each `json` file contains the bot's texts for a specific language.
+3.  **Adding a New Language:**
+      * Create a new `json` file in the `languages` folder with the language code as the filename (e.g., `es.json` for Spanish).
+      * Copy the content of either `fa.json` or `en.json` into the new file.
+      * Translate the copied texts into the new language.
+      * Add the new language code and its name to the `LANGUAGES` dictionary in the main source file (`uploader_bot.py`).
 
-### نمونه فایل پیکربندی زبان فارسی (`fa.json`)
+### Example Persian Language Configuration File (`fa.json`)
 
 ```json
 {
@@ -124,45 +124,49 @@
 }
 ```
 
-## ❤️ حمایت از سازنده
+## ❤️ Support the Developer
 
-اگر از این سورس کد استفاده می‌کنید و آن را مفید می‌دانید، لطفاً با روش‌های زیر از توسعه‌دهنده حمایت کنید:
+If you are using this source code and find it helpful, please consider supporting the developer through the following ways:
 
-  * **ستاره‌دار کردن ریپازیتوری:** با ستاره‌دار کردن این ریپازیتوری در [GitHub](https://github.com/MasterShayan/Tel-uploader-bot) به دیده شدن پروژه کمک کنید.
-  * **پیشنهادات و گزارش مشکلات:** با ارائه پیشنهادات و گزارش مشکلات (Issue) به بهبود سورس کد کمک کنید.
-  * **به اشتراک گذاشتن پروژه:** این پروژه را با دوستان و سایر توسعه‌دهندگان به اشتراک بگذارید.
+  * **Star the Repository:** Help the project gain visibility by starring this repository on [GitHub](https://github.com/MasterShayan/Tel-uploader-bot).
+  * **Suggestions and Issue Reporting:** Contribute to the source code improvement by providing suggestions and reporting issues.
+  * **Share the Project:** Share this project with your friends and other developers.
 
-## 📄 لایسنس
+## 📄 License
 
-این پروژه با مجوز [Attribution-NonCommercial-NoDerivatives 4.0 International](https://www.google.com/url?sa=E&source=gmail&q=https://creativecommons.org/licenses/by-nc-nd/4.0/) منتشر شده است.
+This project is licensed under the [Attribution-NonCommercial-NoDerivatives 4.0 International License](https://www.google.com/url?sa=E&source=gmail&q=https://creativecommons.org/licenses/by-nc-nd/4.0/).
 
-**شما مجاز به:**
+**You are free to:**
 
-  * **اشتراک‌گذاری:** کپی و توزیع مجدد این اثر در هر رسانه‌ای با فرمت.
+  * **Share:** Copy and redistribute the material in any medium or format.
 
-**تحت شرایط زیر:**
+**Under the following terms:**
 
-  * **انتساب (Attribution):**  شما باید نام صاحب اثر را به نحوی که صاحب اثر تعیین کرده‌است ذکر کنید.
-  * **غیرتجاری (NonCommercial):** شما نمی‌توانید از این اثر برای اهداف تجاری استفاده کنید.
-  * **اشتقاق ممنوع (NoDerivatives):** شما نمی‌توانید اثر را تغییر دهید یا مشتقی از آن بسازید.
+  * **Attribution:** You must give appropriate credit, provide a link to the license, and indicate if changes were made. You may do so in any reasonable manner, but not in any way that suggests the licensor endorses you or your use.
+  * **NonCommercial:** You may not use the material for commercial purposes.
+  * **NoDerivatives:** If you remix, transform, or build upon the material, you may not distribute the modified material.
 
-## ⚠️ ورژن 1 - محدودیت‌ها و برنامه ورژن 2
+## ⚠️ Version 1 - Limitations & Version 2 Roadmap
 
-**توجه:** این سورس کد در حال حاضر **ورژن 1** می‌باشد و ممکن است برخی از بخش‌ها به صورت کامل پیاده‌سازی نشده باشند. به خصوص دکمه "⚙️ تنظیمات بیشتر" در پنل مدیریت در این ورژن غیرفعال است.
+**Please Note:** This source code is currently **Version 1**, and some sections may not be fully implemented. Specifically, the "⚙️ More Settings" button in the admin panel is inactive in this version.
 
-**در ورژن 2، امکانات زیر به صورت کامل پیاده‌سازی و رفع اشکال خواهند شد:**
+**Version 2 will fully implement and debug the following features:**
 
-  * فعال‌سازی و تکمیل بخش "⚙️ تنظیمات بیشتر" در پنل مدیریت با امکاناتی نظیر:
-      * تنظیم کانال‌های پشتیبانی
-      * تغییر نام دکمه‌های ربات
-      * ویرایش متن‌های ربات
-      * تغییر شناسه ربات
-  * بهبود عملکرد و رفع اشکالات احتمالی گزارش شده.
-  * افزودن امکانات جدید بر اساس بازخورد کاربران.
+  * Activation and completion of the "⚙️ More Settings" section in the admin panel, including features such as:
+      * Setting up support channels
+      * Changing bot button names
+      * Editing bot texts
+      * Changing the bot ID
+  * Performance improvements and bug fixes for reported issues.
+  * Adding new features based on user feedback.
 
-**برای دریافت آخرین نسخه و اخبار مربوط به ورژن 2، ریپازیتوری را دنبال کنید.**
+**Follow the repository to receive the latest version and news about Version 2.**
 
-**با تشکر از همراهی شما\!** 🙏
+## 🔗 Repository Link
+
+[https://github.com/MasterShayan/Tel-uploader-bot](https://github.com/MasterShayan/Tel-uploader-bot)
+
+**Thank you for your support\!** 🙏
 
 ```
 ```
