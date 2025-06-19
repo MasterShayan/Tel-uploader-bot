@@ -6,11 +6,11 @@ import hashlib
 import random
 import string
 
-# --- Config ---
-BOT_TOKEN = "token"  # Bot Token
-ADMIN_PASSWORD = "pass"  # Admin Password (should be hashed in practice)
-ADMIN_USER_ID = 1111  # Admin User ID
-STORAGE_GROUP_ID = -1111  # Group ID for file storage
+# --- Config (Modified for Heroku) ---
+BOT_TOKEN = os.environ.get('BOT_TOKEN')
+ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD')
+ADMIN_USER_ID = int(os.environ.get('ADMIN_USER_ID'))
+STORAGE_GROUP_ID = int(os.environ.get('STORAGE_GROUP_ID'))
 DEFAULT_LANGUAGE = "en"  # Default Language
 
 bot = telebot.TeleBot(BOT_TOKEN)
@@ -20,9 +20,8 @@ USER_DATA_FILE = "user_data.json"
 ADMIN_CONFIG_FILE = "admin_config.json"
 LANGUAGES_FOLDER = "languages"
 
-# --- Language Support ---
+# --- Language Support (Modified to only include English) ---
 LANGUAGES = {
-    "fa": "فارسی",
     "en": "English"
 }
 
@@ -71,6 +70,7 @@ def load_admin_config():
                 return json.load(f)
         except:
             pass
+    # Use the ADMIN_PASSWORD from the environment for the hash
     return {"bot_status": "BOT is On ✅", "admin_password_hash": hashlib.sha256(ADMIN_PASSWORD.encode()).hexdigest()}
 
 def save_admin_config(config):
@@ -165,7 +165,12 @@ def start_command_handler(message):
             print(f"Error in getfile: {e}")
             send_message(message.chat.id, lang_data["download_link_error"])
     else:
-        send_message(message.chat.id, lang_data["start_message"], reply_markup=language_keyboard())
+        # If there are multiple languages, show choice. Otherwise, just set to default.
+        if len(LANGUAGES) > 1:
+            send_message(message.chat.id, lang_data["start_message"], reply_markup=language_keyboard())
+        else:
+            send_message(message.chat.id, lang_data["start_message"], reply_markup=main_keyboard(DEFAULT_LANGUAGE))
+
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('set_lang_'))
 def language_callback_handler(call):
@@ -284,6 +289,8 @@ def delete_file_handler(message):
     deleted = False
     for media_type in ["photo", "video", "music", "document"]:
         if file_id_to_delete in user_data[str(user_id)].get(media_type, {}):
+            # This part of the original code doesn't actually delete from the group.
+            # A complete implementation would use bot.delete_message here.
             del user_data[str(user_id)][media_type][file_id_to_delete]
             deleted = True
             break
@@ -412,11 +419,12 @@ def broadcast_message_handler(message):
     success_count, fail_count = 0, 0
 
     for uid in user_data:
-        try:
-            send_message(uid, message.text)
-            success_count += 1
-        except:
-            fail_count += 1
+        if not user_data[uid].get("banned", False): # Don't broadcast to banned users
+            try:
+                send_message(uid, message.text)
+                success_count += 1
+            except:
+                fail_count += 1
 
     send_message(message.chat.id, lang_data["admin_broadcast_report"].format(success_count=success_count, fail_count=fail_count), reply_markup=admin_keyboard(get_user_lang_code(user_id)))
     delete_state(user_id)
@@ -436,11 +444,12 @@ def forward_broadcast_message_handler(message):
     success_count, fail_count = 0, 0
 
     for uid in user_data:
-        try:
-            forward_message(uid, message.chat.id, message.message_id)
-            success_count += 1
-        except:
-            fail_count += 1
+        if not user_data[uid].get("banned", False): # Don't broadcast to banned users
+            try:
+                forward_message(uid, message.chat.id, message.message_id)
+                success_count += 1
+            except:
+                fail_count += 1
 
     send_message(message.chat.id, lang_data["admin_forward_broadcast_report"].format(success_count=success_count, fail_count=fail_count), reply_markup=admin_keyboard(get_user_lang_code(user_id)))
     delete_state(user_id)
@@ -453,6 +462,6 @@ if __name__ == "__main__":
         lang_file = os.path.join(LANGUAGES_FOLDER, f"{lang_code}.json")
         if not os.path.exists(lang_file):
             with open(lang_file, "w", encoding="utf-8") as f:
-                json.dump({}, f, indent=4, ensure_ascii=False)  # Empty file for languages
+                json.dump({}, f, indent=4, ensure_ascii=False)
     print("Bot started...")
     bot.infinity_polling()
