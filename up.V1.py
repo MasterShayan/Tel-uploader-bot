@@ -1,117 +1,81 @@
 import telebot
-import json
 import os
+import pymongo
 from telebot import types
 import hashlib
 import random
 import string
 
-# --- Config (Modified for Heroku) ---
+# --- Config (Reading from Heroku Environment) ---
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
 ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD')
 ADMIN_USER_ID = int(os.environ.get('ADMIN_USER_ID'))
 STORAGE_GROUP_ID = int(os.environ.get('STORAGE_GROUP_ID'))
-DEFAULT_LANGUAGE = "en"  # Default Language
+MONGODB_URI = os.environ.get('MONGODB_URI')
+DEFAULT_LANGUAGE = "en"
+
+# --- MongoDB Setup ---
+client = pymongo.MongoClient(MONGODB_URI)
+db = client['uploader_bot_db']  # The main database
+users_collection = db['users']   # Collection for all user data
+admin_collection = db['admin_config'] # Collection for bot-wide settings
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# --- Data Files ---
-USER_DATA_FILE = "user_data.json"
-ADMIN_CONFIG_FILE = "admin_config.json"
-LANGUAGES_FOLDER = "languages"
-
-# --- Language Support (Modified to only include English) ---
+# --- Language Support (English Only) ---
 LANGUAGES = {
     "en": "English"
 }
 
 def load_language(lang_code):
-    """Load language file or return to default language if error"""
+    # This function now only needs to handle the local language JSON file.
+    # It's kept separate in case you want to add more languages later.
     try:
-        with open(os.path.join(LANGUAGES_FOLDER, f"{lang_code}.json"), "r", encoding="utf-8") as f:
+        with open(os.path.join("languages", f"{lang_code}.json"), "r", encoding="utf-8") as f:
             return json.load(f)
     except FileNotFoundError:
-        return load_language(DEFAULT_LANGUAGE)
+        # Fallback to default language if a user's language file is missing
+        with open(os.path.join("languages", f"{DEFAULT_LANGUAGE}.json"), "r", encoding="utf-8") as f:
+            return json.load(f)
 
 def get_user_lang_code(user_id):
-    """Get user language code"""
-    user_data = load_user_data()
-    return user_data.get(str(user_id), {}).get("language", DEFAULT_LANGUAGE)
+    """Gets user language from MongoDB."""
+    user_doc = users_collection.find_one({'_id': user_id}, {'language': 1})
+    if user_doc:
+        return user_doc.get('language', DEFAULT_LANGUAGE)
+    return DEFAULT_LANGUAGE
 
 def get_user_lang(user_id):
-    """Get user language data"""
+    """Gets user language data based on their code."""
     lang_code = get_user_lang_code(user_id)
     return load_language(lang_code)
 
-# --- Data Load/Save Functions ---
-def load_user_data():
-    """Load user data"""
-    if os.path.exists(USER_DATA_FILE):
-        try:
-            with open(USER_DATA_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except:
-            return {}
-    return {}
-
-def save_user_data(data):
-    """Save user data"""
-    try:
-        with open(USER_DATA_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=4, ensure_ascii=False)
-    except Exception as e:
-        print(f"Error saving user data: {e}")
-
-def load_admin_config():
-    """Load admin settings"""
-    if os.path.exists(ADMIN_CONFIG_FILE):
-        try:
-            with open(ADMIN_CONFIG_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except:
-            pass
-    # Use the ADMIN_PASSWORD from the environment for the hash
-    return {"bot_status": "BOT is On ✅", "admin_password_hash": hashlib.sha256(ADMIN_PASSWORD.encode()).hexdigest()}
-
-def save_admin_config(config):
-    """Save admin settings"""
-    try:
-        with open(ADMIN_CONFIG_FILE, "w", encoding="utf-8") as f:
-            json.dump(config, f, indent=4, ensure_ascii=False)
-    except Exception as e:
-        print(f"Error saving admin config: {e}")
-
 # --- Bot Functions ---
 def send_message(chat_id, text, reply_markup=None, parse_mode="HTML"):
-    """Send message with error management"""
     try:
         bot.send_message(chat_id, text, parse_mode=parse_mode, reply_markup=reply_markup, disable_web_page_preview=True)
     except Exception as e:
         print(f"Error sending message to {chat_id}: {e}")
 
 def forward_message(chat_id, from_chat_id, message_id):
-    """Forward message with error management"""
     try:
         bot.forward_message(chat_id, from_chat_id, message_id)
     except Exception as e:
         print(f"Error forwarding message to {chat_id}: {e}")
 
-# --- State Management ---
+# --- State Management (Remains in-memory) ---
 user_states = {}
 
 def set_state(user_id, state):
-    """Set user state"""
     user_states[user_id] = state
 
 def get_state(user_id):
-    """Get user state"""
     return user_states.get(user_id)
 
 def delete_state(user_id):
-    """Delete user state"""
     user_states.pop(user_id, None)
 
-# --- Keyboards ---
+# --- Keyboards (No changes needed) ---
 def main_keyboard(lang_code):
     lang_data = load_language(lang_code)
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
@@ -147,7 +111,6 @@ def start_command_handler(message):
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
 
-    # Download link check
     if len(message.text.split()) > 1 and message.text.split()[1].startswith('getfile_'):
         try:
             file_info = message.text.split()[1].replace('getfile_', '')
@@ -155,32 +118,32 @@ def start_command_handler(message):
             media_type_map = {"p": "photo", "v": "video", "d": "document", "m": "music"}
             media_type = media_type_map.get(file_type_prefix)
 
-            user_data = load_user_data()
-            file_data = user_data.get(file_user_id, {}).get(media_type, {}).get(file_code)
-            if file_data and file_data["token"] == token:
-                forward_message(message.chat.id, STORAGE_GROUP_ID, file_data["message_id_in_group"])
+            # Fetch user data from MongoDB
+            user_doc = users_collection.find_one({'_id': int(file_user_id)})
+            if user_doc:
+                file_data = user_doc.get(media_type, {}).get(file_code)
+                if file_data and file_data["token"] == token:
+                    forward_message(message.chat.id, STORAGE_GROUP_ID, file_data["message_id_in_group"])
+                else:
+                    send_message(message.chat.id, lang_data["download_link_error"])
             else:
                 send_message(message.chat.id, lang_data["download_link_error"])
         except Exception as e:
             print(f"Error in getfile: {e}")
             send_message(message.chat.id, lang_data["download_link_error"])
     else:
-        # If there are multiple languages, show choice. Otherwise, just set to default.
         if len(LANGUAGES) > 1:
             send_message(message.chat.id, lang_data["start_message"], reply_markup=language_keyboard())
         else:
             send_message(message.chat.id, lang_data["start_message"], reply_markup=main_keyboard(DEFAULT_LANGUAGE))
 
-
 @bot.callback_query_handler(func=lambda call: call.data.startswith('set_lang_'))
 def language_callback_handler(call):
     lang_code = call.data.split('_')[2]
     user_id = call.from_user.id
-    user_data = load_user_data()
-    if str(user_id) not in user_data:
-        user_data[str(user_id)] = {}
-    user_data[str(user_id)]["language"] = lang_code
-    save_user_data(user_data)
+    
+    # Update user's language in MongoDB
+    users_collection.update_one({'_id': user_id}, {'$set': {'language': lang_code}}, upsert=True)
 
     lang_data = load_language(lang_code)
     send_message(call.message.chat.id, lang_data["language_set_message"].format(language=LANGUAGES[lang_code]), reply_markup=main_keyboard(lang_code))
@@ -188,6 +151,7 @@ def language_callback_handler(call):
 
 @bot.message_handler(commands=['panel'])
 def panel_command_handler(message):
+    # No DB change needed, this is just an access check
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
     if user_id == ADMIN_USER_ID:
@@ -209,34 +173,37 @@ def upload_media_handler(message):
     lang_data = get_user_lang(user_id)
     media_type, file_id = None, None
 
-    if message.photo:
-        media_type, file_id = "photo", message.photo[-1].file_id
-    elif message.video:
-        media_type, file_id = "video", message.video.file_id
-    elif message.document:
-        media_type, file_id = "document", message.document.file_id
-    elif message.audio:
-        media_type, file_id = "music", message.audio.file_id
+    if message.photo: media_type, file_id = "photo", message.photo[-1].file_id
+    elif message.video: media_type, file_id = "video", message.video.file_id
+    elif message.document: media_type, file_id = "document", message.document.file_id
+    elif message.audio: media_type, file_id = "music", message.audio.file_id
 
     if not media_type:
         send_message(message.chat.id, lang_data["upload_invalid_media_type"], reply_markup=main_keyboard(get_user_lang_code(user_id)))
         delete_state(user_id)
         return
-
-    # Send to group and get message_id
-    sent_message = bot.copy_message(STORAGE_GROUP_ID, message.chat.id, message.message_id, caption=load_user_data().get(str(user_id), {}).get("caption", lang_data["default_caption"]))
+    
+    user_doc = users_collection.find_one({'_id': user_id}, {media_type: 1})
+    caption = user_doc.get('caption', lang_data["default_caption"]) if user_doc else lang_data["default_caption"]
+    
+    sent_message = bot.copy_message(STORAGE_GROUP_ID, message.chat.id, message.message_id, caption=caption)
     message_id_in_group = sent_message.message_id
-
-    user_data = load_user_data()
-    if str(user_id) not in user_data:
-        user_data[str(user_id)] = {"photo": {}, "video": {}, "music": {}, "document": {}}
-
-    file_list = user_data[str(user_id)].get(media_type, {})
-    file_key = str(len(file_list) + 1)
-    token = ''.join(random.choices(string.ascii_letters + string.digits, k=16))  # Security token
-    file_list[file_key] = {"file_id": file_id, "message_id_in_group": message_id_in_group, "token": token}
-    user_data[str(user_id)][media_type] = file_list
-    save_user_data(user_data)
+    
+    if user_doc and media_type in user_doc:
+        file_key = str(len(user_doc[media_type]) + 1)
+    else:
+        file_key = '1'
+        
+    token = ''.join(random.choices(string.ascii_letters + string.digits, k=16))
+    file_data_to_save = {
+        "file_id": file_id, "message_id_in_group": message_id_in_group, "token": token
+    }
+    
+    users_collection.update_one(
+        {'_id': user_id},
+        {'$set': {f"{media_type}.{file_key}": file_data_to_save}},
+        upsert=True
+    )
 
     download_link = f"https://t.me/{bot.get_me().username}?start=getfile_{media_type[0]}_{file_key}_{user_id}_{token}"
     send_message(message.chat.id, lang_data["upload_success_message"].format(file_id=file_key, download_link=download_link), reply_markup=main_keyboard(get_user_lang_code(user_id)))
@@ -246,8 +213,8 @@ def upload_media_handler(message):
 def caption_button_handler(message):
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
-    user_data = load_user_data()
-    current_caption = user_data.get(str(user_id), {}).get("caption", lang_data["default_caption"])
+    user_doc = users_collection.find_one({'_id': user_id}, {'caption': 1})
+    current_caption = user_doc.get('caption', lang_data["default_caption"]) if user_doc else lang_data["default_caption"]
     send_message(message.chat.id, lang_data["caption_request_message"].format(current_caption=current_caption), reply_markup=back_keyboard(get_user_lang_code(user_id)))
     set_state(user_id, "set-caption")
 
@@ -255,11 +222,7 @@ def caption_button_handler(message):
 def set_caption_handler(message):
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
-    user_data = load_user_data()
-    if str(user_id) not in user_data:
-        user_data[str(user_id)] = {}
-    user_data[str(user_id)]["caption"] = message.text
-    save_user_data(user_data)
+    users_collection.update_one({'_id': user_id}, {'$set': {'caption': message.text}}, upsert=True)
     send_message(message.chat.id, lang_data["caption_saved_message"], reply_markup=main_keyboard(get_user_lang_code(user_id)))
     delete_state(user_id)
 
@@ -280,23 +243,20 @@ def delete_file_handler(message):
         send_message(message.chat.id, lang_data["delete_file_invalid_id"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
         return
 
-    user_data = load_user_data()
-    if str(user_id) not in user_data:
+    user_doc = users_collection.find_one({'_id': user_id})
+    if not user_doc:
         send_message(message.chat.id, lang_data["file_not_found"], reply_markup=main_keyboard(get_user_lang_code(user_id)))
         delete_state(user_id)
         return
 
     deleted = False
     for media_type in ["photo", "video", "music", "document"]:
-        if file_id_to_delete in user_data[str(user_id)].get(media_type, {}):
-            # This part of the original code doesn't actually delete from the group.
-            # A complete implementation would use bot.delete_message here.
-            del user_data[str(user_id)][media_type][file_id_to_delete]
+        if media_type in user_doc and file_id_to_delete in user_doc[media_type]:
+            users_collection.update_one({'_id': user_id}, {'$unset': {f"{media_type}.{file_id_to_delete}": ""}})
             deleted = True
             break
-
+    
     if deleted:
-        save_user_data(user_data)
         send_message(message.chat.id, lang_data["delete_file_success"].format(file_id=file_id_to_delete), reply_markup=main_keyboard(get_user_lang_code(user_id)))
     else:
         send_message(message.chat.id, lang_data["file_not_found"], reply_markup=main_keyboard(get_user_lang_code(user_id)))
@@ -325,8 +285,12 @@ def support_handler(message):
 def profile_button_handler(message):
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
-    user_data = load_user_data()
-    file_count = sum(len(user_data.get(str(user_id), {}).get(t, {})) for t in ["photo", "video", "music", "document"])
+    user_doc = users_collection.find_one({'_id': user_id})
+    file_count = 0
+    if user_doc:
+        for media_type in ["photo", "video", "music", "document"]:
+            if media_type in user_doc:
+                file_count += len(user_doc[media_type])
     profile_text = lang_data["profile_message"].format(first_name=message.from_user.first_name, user_id=user_id, file_count=file_count)
     send_message(message.chat.id, profile_text, reply_markup=main_keyboard(get_user_lang_code(user_id)))
 
@@ -342,19 +306,20 @@ def back_button_handler(message):
 def admin_stats_handler(message):
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
-    user_data = load_user_data()
-    config = load_admin_config()
-    stats_text = lang_data["admin_stats_message"].format(user_count=len(user_data), bot_status=config.get("bot_status", "unknown")) # "نامشخص" was translated to "unknown"
+    user_count = users_collection.count_documents({})
+    config = admin_collection.find_one({'_id': 'bot_config'}) or {}
+    bot_status = config.get("bot_status", lang_data["bot_status_on"])
+    stats_text = lang_data["admin_stats_message"].format(user_count=user_count, bot_status=bot_status)
     send_message(message.chat.id, stats_text, reply_markup=admin_keyboard(get_user_lang_code(user_id)))
 
 @bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["admin_bot_status_button"] and message.from_user.id == ADMIN_USER_ID)
 def admin_bot_status_handler(message):
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
-    config = load_admin_config()
-    new_status = lang_data["bot_status_on"] if config.get("bot_status") == lang_data["bot_status_off"] else lang_data["bot_status_off"]
-    config["bot_status"] = new_status
-    save_admin_config(config)
+    config = admin_collection.find_one({'_id': 'bot_config'}) or {}
+    current_status = config.get("bot_status", lang_data["bot_status_on"])
+    new_status = lang_data["bot_status_on"] if current_status == lang_data["bot_status_off"] else lang_data["bot_status_off"]
+    admin_collection.update_one({'_id': 'bot_config'}, {'$set': {'bot_status': new_status}}, upsert=True)
     send_message(message.chat.id, lang_data["admin_bot_status_changed"].format(bot_status=new_status), reply_markup=admin_keyboard(get_user_lang_code(user_id)))
 
 @bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["admin_ban_button"] and message.from_user.id == ADMIN_USER_ID)
@@ -370,11 +335,7 @@ def ban_user_message_handler(message):
     lang_data = get_user_lang(user_id)
     try:
         user_id_to_ban = int(message.text)
-        user_data = load_user_data()
-        if str(user_id_to_ban) not in user_data:
-            user_data[str(user_id_to_ban)] = {}
-        user_data[str(user_id_to_ban)]["banned"] = True
-        save_user_data(user_data)
+        users_collection.update_one({'_id': user_id_to_ban}, {'$set': {'banned': True}}, upsert=True)
         send_message(message.chat.id, lang_data["admin_ban_success"].format(user_id=user_id_to_ban), reply_markup=admin_keyboard(get_user_lang_code(user_id)))
     except ValueError:
         send_message(message.chat.id, lang_data["admin_invalid_user_id"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
@@ -393,10 +354,8 @@ def unban_user_message_handler(message):
     lang_data = get_user_lang(user_id)
     try:
         user_id_to_unban = int(message.text)
-        user_data = load_user_data()
-        if str(user_id_to_unban) in user_data and "banned" in user_data[str(user_id_to_unban)]:
-            del user_data[str(user_id_to_unban)]["banned"]
-            save_user_data(user_data)
+        result = users_collection.update_one({'_id': user_id_to_unban}, {'$unset': {'banned': ""}})
+        if result.modified_count > 0:
             send_message(message.chat.id, lang_data["admin_unban_success"].format(user_id=user_id_to_unban), reply_markup=admin_keyboard(get_user_lang_code(user_id)))
         else:
             send_message(message.chat.id, lang_data["admin_user_not_banned"], reply_markup=admin_keyboard(get_user_lang_code(user_id)))
@@ -415,17 +374,15 @@ def admin_broadcast_handler(message):
 def broadcast_message_handler(message):
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
-    user_data = load_user_data()
+    # Find users who are not banned
+    cursor = users_collection.find({'banned': {'$ne': True}}, {'_id': 1})
     success_count, fail_count = 0, 0
-
-    for uid in user_data:
-        if not user_data[uid].get("banned", False): # Don't broadcast to banned users
-            try:
-                send_message(uid, message.text)
-                success_count += 1
-            except:
-                fail_count += 1
-
+    for doc in cursor:
+        try:
+            send_message(doc['_id'], message.text)
+            success_count += 1
+        except:
+            fail_count += 1
     send_message(message.chat.id, lang_data["admin_broadcast_report"].format(success_count=success_count, fail_count=fail_count), reply_markup=admin_keyboard(get_user_lang_code(user_id)))
     delete_state(user_id)
 
@@ -440,28 +397,25 @@ def admin_forward_broadcast_handler(message):
 def forward_broadcast_message_handler(message):
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
-    user_data = load_user_data()
+    # Find users who are not banned
+    cursor = users_collection.find({'banned': {'$ne': True}}, {'_id': 1})
     success_count, fail_count = 0, 0
-
-    for uid in user_data:
-        if not user_data[uid].get("banned", False): # Don't broadcast to banned users
-            try:
-                forward_message(uid, message.chat.id, message.message_id)
-                success_count += 1
-            except:
-                fail_count += 1
-
+    for doc in cursor:
+        try:
+            forward_message(doc['_id'], message.chat.id, message.message_id)
+            success_count += 1
+        except:
+            fail_count += 1
     send_message(message.chat.id, lang_data["admin_forward_broadcast_report"].format(success_count=success_count, fail_count=fail_count), reply_markup=admin_keyboard(get_user_lang_code(user_id)))
     delete_state(user_id)
 
+
 # --- Main ---
 if __name__ == "__main__":
-    if not os.path.exists(LANGUAGES_FOLDER):
-        os.makedirs(LANGUAGES_FOLDER)
-    for lang_code in LANGUAGES:
-        lang_file = os.path.join(LANGUAGES_FOLDER, f"{lang_code}.json")
-        if not os.path.exists(lang_file):
-            with open(lang_file, "w", encoding="utf-8") as f:
-                json.dump({}, f, indent=4, ensure_ascii=False)
-    print("Bot started...")
+    # The 'languages' folder and its content should still exist for the bot's texts.
+    if not os.path.exists("languages"):
+        os.makedirs("languages")
+        print("Warning: 'languages' directory created. Please add your en.json file.")
+
+    print("Bot starting with MongoDB integration...")
     bot.infinity_polling()
