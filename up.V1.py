@@ -2,11 +2,11 @@ import telebot
 import os
 import pymongo
 import json
-from telebot 
-import types
+from telebot import types
 import hashlib
 import random
 import string
+
 
 # --- Config (Reading from Heroku Environment) ---
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
