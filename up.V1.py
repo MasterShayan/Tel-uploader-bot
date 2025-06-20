@@ -387,7 +387,7 @@ def redeem_code_handler(message):
                 delay = config.get('auto_delete_seconds', 0)
                 if delay > 0: schedule_message_deletion(user_id, sent_message.message_id, delay)
         else:
-            sent_message = send_file_by_id(user_id, item_type, item_content['file_id'])
+            sent_message = send_file_by_id(user_id, item_type, item_content['content']['file_id'])
             if sent_message: prize_message_sent = True
 
     if prize_message_sent:
