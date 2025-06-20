@@ -75,7 +75,7 @@ def get_state(user_id):
 def delete_state(user_id):
     user_states.pop(user_id, None)
 
-# --- Keyboards (MODIFIED FOR NEW BUTTON) ---
+# --- Keyboards ---
 def main_keyboard(lang_code):
     lang_data = load_language(lang_code)
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
@@ -154,13 +154,24 @@ def language_callback_handler(call):
 
 @bot.message_handler(commands=['panel'])
 def panel_command_handler(message):
-    # No DB change needed, this is just an access check
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
     if user_id == ADMIN_USER_ID:
         send_message(message.chat.id, lang_data["admin_panel_welcome"], reply_markup=admin_keyboard(get_user_lang_code(user_id)))
     else:
         send_message(message.chat.id, lang_data["admin_panel_access_denied"])
+
+# --- NEW: /getfile Command Handler ---
+@bot.message_handler(commands=['getfile'])
+def getfile_command_handler(message):
+    user_id = message.from_user.id
+    lang_data = get_user_lang(user_id)
+    
+    # Ask the user for the File ID
+    send_message(message.chat.id, lang_data["get_file_request_message"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
+    
+    # Set the user's state so the bot knows to expect a file ID next
+    set_state(user_id, "get_file_by_id")
 
 # --- User Handlers ---
 @bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["upload_button"])
@@ -297,8 +308,6 @@ def profile_button_handler(message):
     profile_text = lang_data["profile_message"].format(first_name=message.from_user.first_name, user_id=user_id, file_count=file_count)
     send_message(message.chat.id, profile_text, reply_markup=main_keyboard(get_user_lang_code(user_id)))
 
-
-# --- NEW: Handler for Get File by ID button ---
 @bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["get_file_button"])
 def get_file_button_handler(message):
     user_id = message.from_user.id
@@ -343,9 +352,6 @@ def get_file_by_id_handler(message):
 
     if not file_found:
         send_message(message.chat.id, lang_data["file_not_found"])
-
-# --- END OF NEW HANDLERS ---
-
 
 @bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["back_button"])
 def back_button_handler(message):
