@@ -140,8 +140,6 @@ def start_command_handler(message):
                 file_data = user_doc.get(media_type, {}).get(file_code)
                 if file_data and file_data["token"] == token:
                     forward_message(message.chat.id, STORAGE_GROUP_ID, file_data["message_id_in_group"])
-                else:
-                    send_message(message.chat.id, lang_data["download_link_error"])
             else:
                 send_message(message.chat.id, lang_data["download_link_error"])
         except Exception as e:
@@ -216,7 +214,80 @@ def list_admins_handler(message):
             response_text += f"• `{admin_id}`\n"
     send_message(message.chat.id, response_text, parse_mode="Markdown")
 
-# --- All User Handlers ---
+# --- NEW: Handlers for Creating Redeem Codes (Admin Flow) ---
+def generate_redeem_code():
+    """Generates a unique random code."""
+    while True:
+        # Generate a code in the format XXX-XXX-XXX
+        code = '-'.join(''.join(random.choices(string.ascii_uppercase + string.digits, k=4)) for _ in range(3))
+        # Check if it already exists in the database to ensure uniqueness
+        if redeem_codes_collection.find_one({'_id': code}) is None:
+            return code
+
+@bot.message_handler(commands=['createcode'])
+def create_code_command_handler(message):
+    user_id = message.from_user.id
+    lang_data = get_user_lang(user_id)
+    if not is_admin(user_id):
+        send_message(message.chat.id, lang_data["admin_panel_access_denied"])
+        return
+    
+    send_message(user_id, lang_data["create_code_prompt_item"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
+    set_state(user_id, "create_code_awaiting_item")
+
+@bot.message_handler(content_types=['text', 'photo', 'video', 'document', 'audio'], func=lambda message: get_state(message.from_user.id) == "create_code_awaiting_item")
+def create_code_item_handler(message):
+    user_id = message.from_user.id
+    lang_data = get_user_lang(user_id)
+    prize_data = {}
+
+    if message.text and not message.text.startswith('/'):
+        prize_data['type'] = 'text'
+        prize_data['content'] = message.text
+    else:
+        # It's a file, so forward it to the storage channel to get a permanent reference
+        sent_message = bot.forward_message(STORAGE_GROUP_ID, user_id, message.message_id)
+        prize_data['type'] = 'file'
+        prize_data['content'] = {
+            'message_id': sent_message.message_id,
+            'chat_id': STORAGE_GROUP_ID # Store the chat_id for forwarding
+        }
+    
+    send_message(user_id, lang_data["create_code_prompt_limit"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
+    set_state(user_id, "create_code_awaiting_limit", data=prize_data)
+
+@bot.message_handler(func=lambda message: get_state(message.from_user.id) == "create_code_awaiting_limit")
+def create_code_limit_handler(message):
+    user_id = message.from_user.id
+    lang_data = get_user_lang(user_id)
+    prize_data = get_state_data(user_id)
+
+    if not message.text.isdigit():
+        send_message(user_id, "❌ Invalid number. Please enter a number for the redemption limit.")
+        return
+
+    redemption_limit = int(message.text)
+    new_code = generate_redeem_code()
+
+    db_document = {
+        '_id': new_code,
+        'item_type': prize_data['type'],
+        'item_content': prize_data['content'],
+        'redemption_limit': redemption_limit,
+        'redemption_count': 0,
+        'redeemed_by': [],
+        'creator_id': user_id,
+        'created_at': datetime.utcnow()
+    }
+
+    redeem_codes_collection.insert_one(db_document)
+
+    send_message(user_id, lang_data["create_code_success"].format(code=new_code), reply_markup=main_keyboard(get_user_lang_code(user_id)), parse_mode="Markdown")
+    delete_state(user_id)
+
+# --- All other handlers from previous version are here ---
+# ... (upload, caption, delete, profile, getfile, back, admin panel buttons, etc.) ...
+# [PREVIOUSLY WORKING HANDLERS PASTED HERE]
 @bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["upload_button"])
 def upload_button_handler(message):
     user_id = message.from_user.id
@@ -347,13 +418,13 @@ def get_file_by_id_handler(message):
         send_message(message.chat.id, lang_data["delete_file_invalid_id"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
         return
     user_doc = users_collection.find_one({'_id': user_id})
-    if not user__doc:
+    if not user_doc:
         send_message(message.chat.id, lang_data["file_not_found"], reply_markup=main_keyboard(get_user_lang_code(user_id)))
         delete_state(user_id)
         return
     file_found = False
     for media_type in ["photo", "video", "music", "document"]:
-        if media_type in user_doc:
+        if media_type in user_doc and isinstance(user_doc[media_type], dict):
             for file_key, file_data in user_doc[media_type].items():
                 if file_key == file_id_to_get:
                     message_id_in_group = file_data["message_id_in_group"]
