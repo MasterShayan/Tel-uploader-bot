@@ -314,37 +314,20 @@ def create_code_limit_handler(message):
     if not message.text.isdigit():
         send_message(user_id, "❌ Invalid number. Please enter a number for the redemption limit.")
         return
-
     def generate_redeem_code(pool=False):
         while True:
             prefix = "POOL-" if pool else ""
             k_range = 2 if pool else 3
             code = prefix + '-'.join(''.join(random.choices(string.ascii_uppercase + string.digits, k=4)) for _ in range(k_range))
             if redeem_codes_collection.find_one({'_id': code}) is None: return code
-
     is_pool = 'codes' in prize_data
     new_code = generate_redeem_code(pool=is_pool)
-
-    # This logic now correctly separates the data for single items vs. pools
-    if is_pool:
-        item_type_to_save = 'code_pool'
-        item_content_to_save = prize_data['codes']
-    else: # It's a single item
-        item_type_to_save = prize_data['type']
-        item_content_to_save = prize_data['content']
-
     db_document = {
-        '_id': new_code,
-        'item_type': item_type_to_save,
-        'item_content': item_content_to_save, # <-- BUG IS FIXED HERE
-        'redemption_limit': int(message.text),
-        'redemption_count': 0,
-        'redeemed_by': [],
-        'creator_id': user_id,
-        'created_at': datetime.utcnow()
+        '_id': new_code, 'item_type': 'code_pool' if is_pool else prize_data['type'],
+        'item_content': prize_data, 'redemption_limit': int(message.text),
+        'redemption_count': 0, 'redeemed_by': [], 'creator_id': user_id, 'created_at': datetime.utcnow()
     }
     redeem_codes_collection.insert_one(db_document)
-    
     success_message = lang_data["create_pool_success"] if is_pool else lang_data["create_code_success"]
     send_message(user_id, success_message.format(code=db_document['_id']), reply_markup=main_keyboard(get_user_lang_code(user_id)), parse_mode="Markdown")
     delete_state(user_id)
