@@ -1,81 +1,92 @@
-# 🚀 Telegram Uploader Bot - (MongoDB Edition)
+# 🚀 Advanced File Management & Giveaway Bot
 
-> **Note:** This is a heavily modified fork of the original [Tel-uploader-bot by MasterShayan](https://github.com/MasterShayan/Tel-uploader-bot). This version has been significantly upgraded to use a professional and persistent database backend instead of temporary JSON files.
+[![Python](https://img.shields.io/badge/Python-3.11+-blue?style=for-the-badge&logo=python)](https://www.python.org/)
+[![MongoDB](https://img.shields.io/badge/MongoDB-4.7cfc4-green?style=for-the-badge&logo=mongodb)](https://www.mongodb.com/)
+[![Telegram](https://img.shields.io/badge/Telegram-2CA5E0?style=for-the-badge&logo=telegram)](https://telegram.org/)
 
-This version introduces several key improvements:
-- **MongoDB Integration:** All user data and file information is stored in a permanent MongoDB Atlas database, preventing data loss on server restarts.
-- **Environment Variables:** Configuration (like bot tokens and IDs) is handled securely through environment variables, not hardcoded in the script.
-- **Deployment-Ready:** Includes the necessary files (`Procfile`, `requirements.txt`) and instructions for deploying on cloud platforms like Heroku.
+This is an advanced, feature-rich Telegram bot built with Python and `pyTelegramBotAPI`. It provides robust file management, a unique redeem code/giveaway system, and dynamic multi-admin controls, all powered by a persistent MongoDB database backend for permanent data storage.
+
+This project has been significantly upgraded from its original version to be a scalable and professional application suitable for cloud deployment.
 
 ## ✨ Key Features
 
-  * **Persistent Storage:** Thanks to MongoDB, the bot remembers all users and files permanently.
-  * **Easy Upload:** Simply send your files to the bot to upload.
-  * **Multi-Media Support:** Upload photos, videos, documents, and audio files.
-  * **Direct Telegram Links:** Get a unique, shareable link that forwards the file to other users within Telegram.
-  * **File Management:** Set a custom caption for your files and delete them by ID.
-  * **Admin Panel:** Includes features for bot statistics, user management (ban/unban), and broadcasting messages.
+* **Persistent Database:** Uses MongoDB Atlas to ensure no data (users, files, codes) is ever lost on server restarts.
+* **Global File System:** Every uploaded file receives a unique, global ID that any user can use to retrieve the file.
+* **Anonymous File Delivery:** All files delivered by the bot (via links, "Get File by ID", or redemptions) are sent as fresh copies, completely removing the "Forwarded from" tag to protect the privacy of the source channel and users.
+* **Redeem Code System:**
+    * Admins can create codes for prizes (files or text).
+    * Supports both single-use and limited-use codes (e.g., for the first 10 users).
+    * Admins receive real-time notifications when a code is redeemed.
+* **Dynamic Multi-Admin System:**
+    * Supports multiple administrators.
+    * A designated "Bot Owner" can add or remove other admins directly via bot commands.
+* **Full-Featured Admin Panel:** Admins can view bot stats, ban/unban users, and broadcast messages to all users.
 
 ## ⚙️ Deployment Guide
 
-To deploy your own instance of this bot, you will need a few prerequisites and to follow these steps. This guide uses [Heroku](https://www.heroku.com/) as an example platform.
+To deploy your own instance of this bot, you will need a few prerequisites. This guide uses a cloud platform like [Heroku](https://www.heroku.com/) as an example.
 
 ### Prerequisites
 
 1.  A **Telegram Bot Token** from `@BotFather`.
-2.  Your personal **Telegram User ID** (from `@userinfobot`).
-3.  The ID of a private **Telegram Group** where the bot is an admin (for file storage).
-4.  A **MongoDB Atlas Account** ([cloud.mongodb.com](https://cloud.mongodb.com/)). You can use the free M0 tier.
+2.  The **Telegram User IDs** for all your initial admins.
+3.  The ID of a private **Telegram Group** where the bot is an admin (this is used for file storage).
+4.  A **MongoDB Atlas Account** ([cloud.mongodb.com](https://cloud.mongodb.com/)). The free M0 tier is sufficient.
 5.  Your **MongoDB Connection URI** from your Atlas cluster.
 
 ### Step-by-Step Setup
 
-1.  **Fork and Clone the Repository**
-    - Fork this repository to your own GitHub account.
-    - Clone it to your local machine.
-
-2.  **Set Up MongoDB Atlas**
-    - Create a free (M0) cluster on MongoDB Atlas.
-    - In your cluster settings, go to **Database Access** and create a database user with a secure password.
-    - Go to **Network Access** and add an entry for `0.0.0.0/0` (Allow Access From Anywhere). This is necessary for cloud platforms like Heroku to connect.
-    - Go to **Database**, click "Connect" on your cluster, select "Connect your application", and copy your **Connection URI**. Be sure to replace `<password>` with the actual password you just created.
-
-3.  **Create `requirements.txt`**
-    - Create a file named `requirements.txt` in your project's root directory.
-    - Add the following lines to it:
-      ```
-      pyTelegramBotAPI
-      pymongo[srv]
-      certifi
-      ```
-
-4.  **Create `Procfile`**
-    - Create a file named `Procfile` (with a capital 'P' and no extension).
-    - Add the following line to it. This tells Heroku how to run the bot.
-      ```
-      worker: python up.V1.py
-      ```
-
-5.  **Deploy to Heroku**
-    - Create a new app on Heroku.
-    - In the "Deploy" tab of your Heroku app, connect it to your GitHub fork.
-    * In the "Settings" tab, go to "Config Vars" and add the following variables:
+1.  **Fork & Clone:** Fork this repository to your own GitHub account.
+2.  **Set Up MongoDB:**
+    * On MongoDB Atlas, create a free (M0) cluster.
+    * Create a **Database User** with a secure password.
+    * In **Network Access**, add `0.0.0.0/0` to "Allow Access From Anywhere".
+    * Get your **Connection URI** and replace `<password>` with your database user's password.
+3.  **Create `requirements.txt`:** Create this file in your repository with the following content:
+    ```
+    pyTelegramBotAPI
+    pymongo[srv]
+    certifi
+    ```
+4.  **Create `Procfile`:** Create a file named `Procfile` (no extension) with this line:
+    ```
+    worker: python up.V1.py
+    ```
+5.  **Deploy:**
+    * Create a new app on a platform like Heroku and connect it to your GitHub repository.
+    * In the app's settings, add the following **Config Vars** (Environment Variables):
 
 | Key | Value |
 | :--- | :--- |
 | `MONGODB_URI` | Your full MongoDB connection string from Step 2. |
 | `BOT_TOKEN` | Your Telegram bot token. |
-| `ADMIN_USER_ID` | Your personal Telegram user ID. |
+| `ADMIN_IDS` | A comma-separated list of admin User IDs. The **first ID** is the Bot Owner. |
 | `STORAGE_GROUP_ID` | The ID of your private Telegram group. |
-| `ADMIN_PASSWORD` | Any password (this feature is not fully implemented). |
 
-    - Go back to the "Deploy" tab and click **"Deploy Branch"**.
-    - Finally, go to the **"Resources"** tab and make sure the `worker` dyno is switched ON.
+6.  **Set Bot Commands:** In `@BotFather`, use `/setcommands` and provide the list from the section below to make the commands easily accessible to users.
+7.  **Deploy & Run:** Deploy the branch from your Heroku dashboard. Go to the "Resources" tab and ensure the `worker` dyno is switched ON.
+
+## 🤖 Bot Commands
+
+### For All Users
+* `/start` - Starts the bot and shows the main menu.
+* `/getfile` - Asks for a Global File ID to retrieve a file.
+* `/redeem` - Asks for a code to redeem a prize.
+
+### For Admins Only
+* `/panel` - Shows the admin panel with more options.
+* `/createcode` - Starts the process of creating a new redeem code.
+* `/listadmins` - Shows a list of all current bot admins.
+
+### For the Bot Owner Only
+* `/addadmin <user_id>` - Promotes a user to an admin.
+* `/removeadmin <user_id>` - Removes an admin's privileges.
+
 
 ## 🙏 Credits and Acknowledgements
 
-* **Original Concept & Base Code:** [MasterShayan](https://github.com/MasterShayan)
-* **MongoDB Integration & Deployment Refactoring:** [@XEX10DERV66](https://github.com/thetechsavage26)
+* **Original Bot Concept:** [MasterShayan](https://github.com/MasterShayan)
+* **Major Upgrades & Refactoring:** This version was developed with significant architectural upgrades by [@XEX10DERV66](https://github.com/thetechsavage26).
 
 ## 📄 License
 
