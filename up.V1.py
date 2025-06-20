@@ -380,7 +380,7 @@ def redeem_code_handler(message):
     else:
         item_content = code_doc['item_content']
         if item_type == 'text':
-            sent_message = send_message(user_id, item_content['text'])
+            sent_message = send_message(user_id, item_content['content']['text'])
             if sent_message:
                 prize_message_sent = True
                 config = admin_collection.find_one({'_id': 'bot_config'}) or {}
