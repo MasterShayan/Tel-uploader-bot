@@ -82,7 +82,6 @@ def forward_message(chat_id, from_chat_id, message_id):
     except Exception as e:
         print(f"Error forwarding message to {chat_id}: {e}")
 
-# NEW: Function to send files by ID to remove forward tags
 def send_file_by_id(chat_id, file_type, file_id, caption=None):
     try:
         if file_type == "photo":
@@ -154,8 +153,11 @@ def start_command_handler(message):
             if user_doc:
                 file_data = user_doc.get(media_type, {}).get(file_code)
                 if file_data and file_data["token"] == token:
-                    # Anonymity is less critical here as it's a direct link to the user
-                    forward_message(message.chat.id, STORAGE_GROUP_ID, file_data["message_id_in_group"])
+                    # <<< MODIFICATION IS HERE >>>
+                    # Instead of forwarding, send a new copy to be anonymous
+                    send_file_by_id(message.chat.id, media_type, file_data["file_id"])
+                else:
+                    send_message(message.chat.id, lang_data["download_link_error"])
             else:
                 send_message(message.chat.id, lang_data["download_link_error"])
         except Exception as e:
@@ -200,15 +202,11 @@ def redeem_command_handler(message):
 @bot.message_handler(commands=['addadmin', 'removeadmin', 'listadmins'])
 def admin_management_commands(message):
     command = message.text.split()[0].lower()
-    if command == '/addadmin':
-        add_admin_handler(message)
-    elif command == '/removeadmin':
-        remove_admin_handler(message)
-    elif command == '/listadmins':
-        list_admins_handler(message)
+    if command == '/addadmin': add_admin_handler(message)
+    elif command == '/removeadmin': remove_admin_handler(message)
+    elif command == '/listadmins': list_admins_handler(message)
         
 def add_admin_handler(message):
-    # This is now a helper, not a message handler
     if message.from_user.id != OWNER_ID:
         send_message(message.chat.id, "❌ This command can only be used by the Bot Owner.")
         return
@@ -223,7 +221,6 @@ def add_admin_handler(message):
         send_message(message.chat.id, "Please use the correct format: `/addadmin <user_id>`")
 
 def remove_admin_handler(message):
-    # This is now a helper, not a message handler
     if message.from_user.id != OWNER_ID:
         send_message(message.chat.id, "❌ This command can only be used by the Bot Owner.")
         return
@@ -241,7 +238,6 @@ def remove_admin_handler(message):
         send_message(message.chat.id, "Please use the correct format: `/removeadmin <user_id>`")
 
 def list_admins_handler(message):
-    # This is now a helper, not a message handler
     if not is_admin(message.from_user.id):
         send_message(message.chat.id, get_user_lang(message.from_user.id)["admin_panel_access_denied"])
         return
@@ -257,28 +253,18 @@ def list_admins_handler(message):
             response_text += f"• `{admin_id}`\n"
     send_message(message.chat.id, response_text, parse_mode="Markdown")
 
-# --- All other handlers (state-based and button-based) ---
-
+# --- All User and State-Based Handlers ---
 @bot.message_handler(content_types=['text', 'photo', 'video', 'document', 'audio'], func=lambda message: get_state(message.from_user.id) is not None)
 def master_state_handler(message):
-    # This single handler routes all messages for users who are in a 'state'
     state = get_state(message.from_user.id)
-    if state == "create_code_awaiting_item":
-        create_code_item_handler(message)
-    elif state == "create_code_awaiting_limit":
-        create_code_limit_handler(message)
-    elif state == "awaiting_redeem_code":
-        redeem_code_handler(message)
-    elif state == "upload":
-        upload_media_handler(message)
-    elif state == "set-caption":
-        set_caption_handler(message)
-    elif state == "delete-file":
-        delete_file_handler(message)
-    elif state == "get_file_by_id":
-        get_file_by_id_handler(message)
-    elif state == "support":
-        support_handler(message)
+    if state == "create_code_awaiting_item": create_code_item_handler(message)
+    elif state == "create_code_awaiting_limit": create_code_limit_handler(message)
+    elif state == "awaiting_redeem_code": redeem_code_handler(message)
+    elif state == "upload": upload_media_handler(message)
+    elif state == "set-caption": set_caption_handler(message)
+    elif state == "delete-file": delete_file_handler(message)
+    elif state == "get_file_by_id": get_file_by_id_handler(message)
+    elif state == "support": support_handler(message)
     elif is_admin(message.from_user.id):
         if state == "ban_user": ban_user_message_handler(message)
         elif state == "unban_user": unban_user_message_handler(message)
@@ -287,7 +273,6 @@ def master_state_handler(message):
 
 @bot.message_handler(func=lambda message: message.content_type == 'text')
 def button_handlers(message):
-    # This single handler routes all button clicks
     lang_data = get_user_lang(message.from_user.id)
     text = message.text
     if text == lang_data["upload_button"]: upload_button_handler(message)
@@ -296,7 +281,7 @@ def button_handlers(message):
     elif text == lang_data["support_button"]: support_button_handler(message)
     elif text == lang_data["profile_button"]: profile_button_handler(message)
     elif text == lang_data["get_file_button"]: get_file_button_handler(message)
-    elif text == lang_data["redeem_button"]: redeem_command_and_button_handler(message) # Use the same handler as the command
+    elif text == lang_data["redeem_button"]: redeem_command_and_button_handler(message)
     elif text == lang_data["back_button"]: back_button_handler(message)
     elif is_admin(message.from_user.id):
         if text == lang_data["admin_stats_button"]: admin_stats_handler(message)
@@ -343,6 +328,12 @@ def create_code_limit_handler(message):
     redeem_codes_collection.insert_one(db_document)
     send_message(user_id, lang_data["create_code_success"].format(code=db_document['_id']), reply_markup=main_keyboard(get_user_lang_code(user_id)), parse_mode="Markdown")
     delete_state(user_id)
+
+def redeem_command_and_button_handler(message):
+    user_id = message.from_user.id
+    lang_data = get_user_lang(user_id)
+    send_message(message.chat.id, lang_data["redeem_prompt_code"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
+    set_state(user_id, "awaiting_redeem_code")
 
 def redeem_code_handler(message):
     user_id = message.from_user.id
@@ -499,7 +490,7 @@ def get_file_by_id_handler(message):
         if media_type in user_doc and isinstance(user_doc[media_type], dict):
             if file_id_to_get in user_doc[media_type]:
                 file_data = user_doc[media_type][file_id_to_get]
-                send_file_by_id(user_id, media_type, file_data["file_id"])
+                send_file_by_id(user_id, media_type, file_data["file_id"]) # Send copy
                 file_found = True
                 break
     if file_found:
@@ -616,5 +607,5 @@ def forward_broadcast_message_handler(message):
 # --- Main ---
 if __name__ == "__main__":
     get_admin_list() 
-    print("Bot starting with MongoDB integration and multi-admin support...")
+    print("Bot starting with MongoDB integration and all features...")
     bot.infinity_polling()
