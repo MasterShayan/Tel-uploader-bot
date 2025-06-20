@@ -6,27 +6,51 @@ from telebot import types
 import hashlib
 import random
 import string
+from datetime import datetime
 
 # --- Config (Reading from Heroku Environment) ---
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
-ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD')
-ADMIN_USER_ID = int(os.environ.get('ADMIN_USER_ID'))
+ADMIN_IDS_STR = os.environ.get('ADMIN_IDS', '0')
+try:
+    INITIAL_ADMIN_IDS = [int(i.strip()) for i in ADMIN_IDS_STR.split(',') if i.strip()]
+    OWNER_ID = INITIAL_ADMIN_IDS[0] if INITIAL_ADMIN_IDS else 0
+except (ValueError, IndexError):
+    print("ERROR: Invalid ADMIN_IDS format in environment variables.")
+    INITIAL_ADMIN_IDS = []
+    OWNER_ID = 0
+
 STORAGE_GROUP_ID = int(os.environ.get('STORAGE_GROUP_ID'))
 MONGODB_URI = os.environ.get('MONGODB_URI')
 DEFAULT_LANGUAGE = "en"
 
 # --- MongoDB Setup ---
 client = pymongo.MongoClient(MONGODB_URI)
-db = client['uploader_bot_db']  # The main database
-users_collection = db['users']   # Collection for all user data
-admin_collection = db['admin_config'] # Collection for bot-wide settings
+db = client['uploader_bot_db']
+users_collection = db['users']
+admin_collection = db['admin_config']
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# --- Language Support (English Only) ---
-LANGUAGES = {
-    "en": "English"
-}
+# --- Admin Management Helpers ---
+def get_admin_list():
+    config = admin_collection.find_one({'_id': 'bot_config'})
+    if config and 'admin_ids' in config:
+        return config['admin_ids']
+    else:
+        if INITIAL_ADMIN_IDS:
+            admin_collection.update_one(
+                {'_id': 'bot_config'},
+                {'$set': {'admin_ids': INITIAL_ADMIN_IDS}},
+                upsert=True
+            )
+            return INITIAL_ADMIN_IDS
+        return []
+
+def is_admin(user_id):
+    return user_id in get_admin_list()
+
+# --- Language Support ---
+LANGUAGES = {"en": "English"}
 
 def load_language(lang_code):
     try:
@@ -37,14 +61,10 @@ def load_language(lang_code):
             return json.load(f)
 
 def get_user_lang_code(user_id):
-    """Gets user language from MongoDB."""
     user_doc = users_collection.find_one({'_id': user_id}, {'language': 1})
-    if user_doc:
-        return user_doc.get('language', DEFAULT_LANGUAGE)
-    return DEFAULT_LANGUAGE
+    return user_doc.get('language', DEFAULT_LANGUAGE) if user_doc else DEFAULT_LANGUAGE
 
 def get_user_lang(user_id):
-    """Gets user language data based on their code."""
     lang_code = get_user_lang_code(user_id)
     return load_language(lang_code)
 
@@ -61,14 +81,11 @@ def forward_message(chat_id, from_chat_id, message_id):
     except Exception as e:
         print(f"Error forwarding message to {chat_id}: {e}")
 
-# --- State Management (Remains in-memory) ---
+# --- State Management ---
 user_states = {}
-def set_state(user_id, state):
-    user_states[user_id] = state
-def get_state(user_id):
-    return user_states.get(user_id)
-def delete_state(user_id):
-    user_states.pop(user_id, None)
+def set_state(user_id, state): user_states[user_id] = state
+def get_state(user_id): return user_states.get(user_id)
+def delete_state(user_id): user_states.pop(user_id, None)
 
 # --- Keyboards ---
 def main_keyboard(lang_code):
@@ -85,7 +102,6 @@ def admin_keyboard(lang_code):
     markup.add(types.KeyboardButton(lang_data["admin_stats_button"]), types.KeyboardButton(lang_data["admin_bot_status_button"]))
     markup.add(types.KeyboardButton(lang_data["admin_ban_button"]), types.KeyboardButton(lang_data["admin_unban_button"]))
     markup.add(types.KeyboardButton(lang_data["admin_broadcast_button"]), types.KeyboardButton(lang_data["admin_forward_broadcast_button"]))
-    markup.add(types.KeyboardButton(lang_data["admin_settings_button"]))
     return markup
 
 def back_keyboard(lang_code):
@@ -94,17 +110,12 @@ def back_keyboard(lang_code):
     markup.add(types.KeyboardButton(lang_data["back_button"]))
     return markup
 
-def language_keyboard():
-    markup = types.InlineKeyboardMarkup()
-    for lang_code, lang_name in LANGUAGES.items():
-        markup.add(types.InlineKeyboardButton(text=lang_name, callback_data=f"set_lang_{lang_code}"))
-    return markup
-
 # --- Command Handlers ---
 @bot.message_handler(commands=['start'])
 def start_command_handler(message):
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
+    # This logic handles download links
     if len(message.text.split()) > 1 and message.text.split()[1].startswith('getfile_'):
         try:
             file_info = message.text.split()[1].replace('getfile_', '')
@@ -124,24 +135,13 @@ def start_command_handler(message):
             print(f"Error in getfile: {e}")
             send_message(message.chat.id, lang_data["download_link_error"])
     else:
+        # Standard start command
         users_collection.update_one({'_id': user_id}, {'$set': {'username': message.from_user.username, 'first_name': message.from_user.first_name}}, upsert=True)
-        if len(LANGUAGES) > 1:
-            send_message(message.chat.id, lang_data["start_message"], reply_markup=language_keyboard())
-        else:
-            send_message(message.chat.id, lang_data["start_message"], reply_markup=main_keyboard(DEFAULT_LANGUAGE))
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('set_lang_'))
-def language_callback_handler(call):
-    lang_code = call.data.split('_')[2]
-    user_id = call.from_user.id
-    users_collection.update_one({'_id': user_id}, {'$set': {'language': lang_code}}, upsert=True)
-    lang_data = load_language(lang_code)
-    send_message(call.message.chat.id, lang_data["language_set_message"].format(language=LANGUAGES[lang_code]), reply_markup=main_keyboard(lang_code))
-    bot.answer_callback_query(call.id, lang_data["language_changed_alert"])
+        send_message(message.chat.id, lang_data["start_message"], reply_markup=main_keyboard(DEFAULT_LANGUAGE))
 
 @bot.message_handler(commands=['panel'])
 def panel_command_handler(message):
-    if message.from_user.id == ADMIN_USER_ID:
+    if is_admin(message.from_user.id):
         lang_data = get_user_lang(message.from_user.id)
         send_message(message.chat.id, lang_data["admin_panel_welcome"], reply_markup=admin_keyboard(get_user_lang_code(message.from_user.id)))
     else:
@@ -153,8 +153,58 @@ def getfile_command_handler(message):
     lang_data = get_user_lang(user_id)
     send_message(message.chat.id, lang_data["get_file_request_message"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
     set_state(user_id, "get_file_by_id")
+    
+@bot.message_handler(commands=['addadmin'])
+def add_admin_handler(message):
+    if message.from_user.id != OWNER_ID:
+        send_message(message.chat.id, "❌ This command can only be used by the Bot Owner.")
+        return
+    try:
+        target_id = int(message.text.split()[1])
+        if is_admin(target_id):
+            send_message(message.chat.id, f"User {target_id} is already an admin.")
+            return
+        admin_collection.update_one({'_id': 'bot_config'}, {'$addToSet': {'admin_ids': target_id}}, upsert=True)
+        send_message(message.chat.id, f"✅ User {target_id} has been promoted to admin.")
+    except (IndexError, ValueError):
+        send_message(message.chat.id, "Please use the correct format: `/addadmin <user_id>`")
 
-# --- User Handlers ---
+@bot.message_handler(commands=['removeadmin'])
+def remove_admin_handler(message):
+    if message.from_user.id != OWNER_ID:
+        send_message(message.chat.id, "❌ This command can only be used by the Bot Owner.")
+        return
+    try:
+        target_id = int(message.text.split()[1])
+        if target_id == OWNER_ID:
+            send_message(message.chat.id, "You cannot remove the Bot Owner.")
+            return
+        result = admin_collection.update_one({'_id': 'bot_config'}, {'$pull': {'admin_ids': target_id}})
+        if result.modified_count > 0:
+            send_message(message.chat.id, f"🗑️ User {target_id} has been removed from admins.")
+        else:
+            send_message(message.chat.id, f"User {target_id} was not found in the admin list.")
+    except (IndexError, ValueError):
+        send_message(message.chat.id, "Please use the correct format: `/removeadmin <user_id>`")
+
+@bot.message_handler(commands=['listadmins'])
+def list_admins_handler(message):
+    if not is_admin(message.from_user.id):
+        send_message(message.chat.id, get_user_lang(message.from_user.id)["admin_panel_access_denied"])
+        return
+    admin_list = get_admin_list()
+    if not admin_list:
+        send_message(message.chat.id, "There are currently no admins configured.")
+        return
+    response_text = "👑 **Current Bot Admins** 👑\n\n"
+    for admin_id in admin_list:
+        if admin_id == OWNER_ID:
+            response_text += f"• `{admin_id}` (Owner)\n"
+        else:
+            response_text += f"• `{admin_id}`\n"
+    send_message(message.chat.id, response_text, parse_mode="Markdown")
+
+# --- ALL USER HANDLERS ARE NOW INCLUDED ---
 @bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["upload_button"])
 def upload_button_handler(message):
     user_id = message.from_user.id
@@ -252,7 +302,7 @@ def support_handler(message):
     support_message = lang_data["support_message_prefix"].format(first_name=message.from_user.first_name, user_id=user_id) + message.text
     admin_markup = types.InlineKeyboardMarkup()
     admin_markup.add(types.InlineKeyboardButton(text=lang_data["support_answer_button"], callback_data=f"answer_support_{user_id}"))
-    send_message(ADMIN_USER_ID, support_message, reply_markup=admin_markup)
+    send_message(OWNER_ID, support_message, reply_markup=admin_markup) # Support messages go to the owner
     send_message(message.chat.id, lang_data["support_message_sent"], reply_markup=main_keyboard(get_user_lang_code(user_id)))
     delete_state(user_id)
 
@@ -264,7 +314,7 @@ def profile_button_handler(message):
     file_count = 0
     if user_doc:
         for media_type in ["photo", "video", "music", "document"]:
-            if media_type in user_doc:
+            if media_type in user_doc and isinstance(user_doc[media_type], dict):
                 file_count += len(user_doc[media_type])
     profile_text = lang_data["profile_message"].format(first_name=message.from_user.first_name, user_id=user_id, file_count=file_count)
     send_message(message.chat.id, profile_text, reply_markup=main_keyboard(get_user_lang_code(user_id)))
@@ -308,13 +358,11 @@ def get_file_by_id_handler(message):
 @bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["back_button"])
 def back_button_handler(message):
     user_id = message.from_user.id
-    lang_data = get_user_lang(user_id)
     delete_state(user_id)
-    send_message(message.chat.id, lang_data["main_menu_back"], reply_markup=main_keyboard(get_user_lang_code(user_id)))
+    send_message(message.chat.id, get_user_lang(user_id)["main_menu_back"], reply_markup=main_keyboard(get_user_lang_code(user_id)))
 
-# --- Admin Handlers ---
-# ... (All admin handlers remain the same as before)
-@bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["admin_stats_button"] and message.from_user.id == ADMIN_USER_ID)
+# --- ALL ADMIN HANDLERS NOW USE 'is_admin()' CHECK ---
+@bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["admin_stats_button"] and is_admin(message.from_user.id))
 def admin_stats_handler(message):
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
@@ -324,7 +372,7 @@ def admin_stats_handler(message):
     stats_text = lang_data["admin_stats_message"].format(user_count=user_count, bot_status=bot_status)
     send_message(message.chat.id, stats_text, reply_markup=admin_keyboard(get_user_lang_code(user_id)))
 
-@bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["admin_bot_status_button"] and message.from_user.id == ADMIN_USER_ID)
+@bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["admin_bot_status_button"] and is_admin(message.from_user.id))
 def admin_bot_status_handler(message):
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
@@ -334,14 +382,14 @@ def admin_bot_status_handler(message):
     admin_collection.update_one({'_id': 'bot_config'}, {'$set': {'bot_status': new_status}}, upsert=True)
     send_message(message.chat.id, lang_data["admin_bot_status_changed"].format(bot_status=new_status), reply_markup=admin_keyboard(get_user_lang_code(user_id)))
 
-@bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["admin_ban_button"] and message.from_user.id == ADMIN_USER_ID)
+@bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["admin_ban_button"] and is_admin(message.from_user.id))
 def admin_ban_handler(message):
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
     send_message(message.chat.id, lang_data["admin_ban_request"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
     set_state(user_id, "ban_user")
 
-@bot.message_handler(func=lambda message: get_state(message.from_user.id) == "ban_user")
+@bot.message_handler(func=lambda message: get_state(message.from_user.id) == "ban_user" and is_admin(message.from_user.id))
 def ban_user_message_handler(message):
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
@@ -353,14 +401,14 @@ def ban_user_message_handler(message):
         send_message(message.chat.id, lang_data["admin_invalid_user_id"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
     delete_state(user_id)
 
-@bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["admin_unban_button"] and message.from_user.id == ADMIN_USER_ID)
+@bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["admin_unban_button"] and is_admin(message.from_user.id))
 def admin_unban_handler(message):
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
     send_message(message.chat.id, lang_data["admin_unban_request"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
     set_state(user_id, "unban_user")
 
-@bot.message_handler(func=lambda message: get_state(message.from_user.id) == "unban_user")
+@bot.message_handler(func=lambda message: get_state(message.from_user.id) == "unban_user" and is_admin(message.from_user.id))
 def unban_user_message_handler(message):
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
@@ -375,14 +423,14 @@ def unban_user_message_handler(message):
         send_message(message.chat.id, lang_data["admin_invalid_user_id"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
     delete_state(user_id)
 
-@bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["admin_broadcast_button"] and message.from_user.id == ADMIN_USER_ID)
+@bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["admin_broadcast_button"] and is_admin(message.from_user.id))
 def admin_broadcast_handler(message):
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
     send_message(message.chat.id, lang_data["admin_broadcast_request"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
     set_state(user_id, "broadcast_message")
 
-@bot.message_handler(func=lambda message: get_state(message.from_user.id) == "broadcast_message")
+@bot.message_handler(func=lambda message: get_state(message.from_user.id) == "broadcast_message" and is_admin(message.from_user.id))
 def broadcast_message_handler(message):
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
@@ -397,14 +445,14 @@ def broadcast_message_handler(message):
     send_message(message.chat.id, lang_data["admin_broadcast_report"].format(success_count=success_count, fail_count=fail_count), reply_markup=admin_keyboard(get_user_lang_code(user_id)))
     delete_state(user_id)
 
-@bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["admin_forward_broadcast_button"] and message.from_user.id == ADMIN_USER_ID)
+@bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["admin_forward_broadcast_button"] and is_admin(message.from_user.id))
 def admin_forward_broadcast_handler(message):
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
     send_message(message.chat.id, lang_data["admin_forward_broadcast_request"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
     set_state(user_id, "forward_broadcast_message")
 
-@bot.message_handler(content_types=['any'], func=lambda message: get_state(message.from_user.id) == "forward_broadcast_message")
+@bot.message_handler(content_types=['any'], func=lambda message: get_state(message.from_user.id) == "forward_broadcast_message" and is_admin(message.from_user.id))
 def forward_broadcast_message_handler(message):
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
@@ -419,11 +467,9 @@ def forward_broadcast_message_handler(message):
     send_message(message.chat.id, lang_data["admin_forward_broadcast_report"].format(success_count=success_count, fail_count=fail_count), reply_markup=admin_keyboard(get_user_lang_code(user_id)))
     delete_state(user_id)
 
+
 # --- Main ---
 if __name__ == "__main__":
-    if not os.path.exists("languages"):
-        os.makedirs("languages")
-        print("Warning: 'languages' directory created. Please add your en.json file.")
-
-    print("Bot starting with MongoDB integration...")
+    get_admin_list() # Initialize the admin list on first start
+    print("Bot starting with MongoDB integration and multi-admin support...")
     bot.infinity_polling()
