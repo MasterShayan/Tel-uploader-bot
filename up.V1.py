@@ -7,7 +7,6 @@ import hashlib
 import random
 import string
 
-
 # --- Config (Reading from Heroku Environment) ---
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
 ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD')
@@ -31,7 +30,6 @@ LANGUAGES = {
 
 def load_language(lang_code):
     # This function now only needs to handle the local language JSON file.
-    # It's kept separate in case you want to add more languages later.
     try:
         with open(os.path.join("languages", f"{lang_code}.json"), "r", encoding="utf-8") as f:
             return json.load(f)
@@ -77,13 +75,16 @@ def get_state(user_id):
 def delete_state(user_id):
     user_states.pop(user_id, None)
 
-# --- Keyboards (No changes needed) ---
+# --- Keyboards (MODIFIED FOR NEW BUTTON) ---
 def main_keyboard(lang_code):
     lang_data = load_language(lang_code)
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add(types.KeyboardButton(lang_data["upload_button"]), types.KeyboardButton(lang_data["caption_button"]))
-    markup.add(types.KeyboardButton(lang_data["delete_button"]), types.KeyboardButton(lang_data["support_button"]))
-    markup.add(types.KeyboardButton(lang_data["profile_button"]))
+    # Row 1
+    markup.add(types.KeyboardButton(lang_data["upload_button"]))
+    # Row 2
+    markup.add(types.KeyboardButton(lang_data["delete_button"]), types.KeyboardButton(lang_data["get_file_button"]))
+    # Row 3
+    markup.add(types.KeyboardButton(lang_data["caption_button"]), types.KeyboardButton(lang_data["support_button"]), types.KeyboardButton(lang_data["profile_button"]))
     return markup
 
 def admin_keyboard(lang_code):
@@ -185,7 +186,7 @@ def upload_media_handler(message):
         delete_state(user_id)
         return
     
-    user_doc = users_collection.find_one({'_id': user_id}, {media_type: 1})
+    user_doc = users_collection.find_one({'_id': user_id}, {'caption': 1, media_type: 1})
     caption = user_doc.get('caption', lang_data["default_caption"]) if user_doc else lang_data["default_caption"]
     
     sent_message = bot.copy_message(STORAGE_GROUP_ID, message.chat.id, message.message_id, caption=caption)
@@ -295,6 +296,56 @@ def profile_button_handler(message):
                 file_count += len(user_doc[media_type])
     profile_text = lang_data["profile_message"].format(first_name=message.from_user.first_name, user_id=user_id, file_count=file_count)
     send_message(message.chat.id, profile_text, reply_markup=main_keyboard(get_user_lang_code(user_id)))
+
+
+# --- NEW: Handler for Get File by ID button ---
+@bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["get_file_button"])
+def get_file_button_handler(message):
+    user_id = message.from_user.id
+    lang_data = get_user_lang(user_id)
+    send_message(message.chat.id, lang_data["get_file_request_message"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
+    set_state(user_id, "get_file_by_id")
+
+@bot.message_handler(func=lambda message: get_state(message.from_user.id) == "get_file_by_id")
+def get_file_by_id_handler(message):
+    user_id = message.from_user.id
+    lang_data = get_user_lang(user_id)
+    file_id_to_get = message.text
+
+    if not file_id_to_get.isdigit():
+        send_message(message.chat.id, lang_data["delete_file_invalid_id"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
+        return
+
+    # Query the user's document from MongoDB
+    user_doc = users_collection.find_one({'_id': user_id})
+    if not user_doc:
+        send_message(message.chat.id, lang_data["file_not_found"], reply_markup=main_keyboard(get_user_lang_code(user_id)))
+        delete_state(user_id)
+        return
+
+    file_found = False
+    # Search through all media types for the matching file ID
+    for media_type in ["photo", "video", "music", "document"]:
+        if media_type in user_doc:
+            for file_key, file_data in user_doc[media_type].items():
+                if file_key == file_id_to_get:
+                    # File found, forward it to the user
+                    message_id_in_group = file_data["message_id_in_group"]
+                    forward_message(user_id, STORAGE_GROUP_ID, message_id_in_group)
+                    file_found = True
+                    break
+        if file_found:
+            break
+    
+    # Clean up state and notify user
+    delete_state(user_id)
+    send_message(message.chat.id, lang_data["main_menu_back"], reply_markup=main_keyboard(get_user_lang_code(user_id)))
+
+    if not file_found:
+        send_message(message.chat.id, lang_data["file_not_found"])
+
+# --- END OF NEW HANDLERS ---
+
 
 @bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["back_button"])
 def back_button_handler(message):
