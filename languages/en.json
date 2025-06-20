@@ -5,6 +5,8 @@
     "delete_button": "🗑 Delete File",
     "support_button": "Support 🗣",
     "profile_button": "⚙️ Profile",
+    "get_file_button": "📂 Get File by ID",
+    "get_file_request_message": "🆔 Please enter the File ID of the media you want to retrieve:",
     "back_button": "Back",
     "main_menu_back": "Back to main menu.",
     "upload_request_message": "Please send your media:",
