@@ -28,6 +28,7 @@ client = pymongo.MongoClient(MONGODB_URI)
 db = client['uploader_bot_db']
 users_collection = db['users']
 admin_collection = db['admin_config']
+redeem_codes_collection = db['redeem_codes']
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
@@ -81,19 +82,32 @@ def forward_message(chat_id, from_chat_id, message_id):
     except Exception as e:
         print(f"Error forwarding message to {chat_id}: {e}")
 
-# --- State Management ---
+# --- State Management (Enhanced to store data) ---
 user_states = {}
-def set_state(user_id, state): user_states[user_id] = state
-def get_state(user_id): return user_states.get(user_id)
-def delete_state(user_id): user_states.pop(user_id, None)
+def set_state(user_id, state, data=None):
+    user_states[user_id] = {'state': state, 'data': data}
+def get_state(user_id): 
+    return user_states.get(user_id, {}).get('state')
+def get_state_data(user_id):
+    return user_states.get(user_id, {}).get('data')
+def delete_state(user_id): 
+    user_states.pop(user_id, None)
 
 # --- Keyboards ---
 def main_keyboard(lang_code):
     lang_data = load_language(lang_code)
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add(types.KeyboardButton(lang_data["upload_button"]))
-    markup.add(types.KeyboardButton(lang_data["delete_button"]), types.KeyboardButton(lang_data["get_file_button"]))
-    markup.add(types.KeyboardButton(lang_data["caption_button"]), types.KeyboardButton(lang_data["support_button"]), types.KeyboardButton(lang_data["profile_button"]))
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    btn1 = types.KeyboardButton(lang_data["upload_button"])
+    btn2 = types.KeyboardButton(lang_data["delete_button"])
+    btn3 = types.KeyboardButton(lang_data["get_file_button"])
+    btn4 = types.KeyboardButton(lang_data["redeem_button"])
+    btn5 = types.KeyboardButton(lang_data["caption_button"])
+    btn6 = types.KeyboardButton(lang_data["support_button"])
+    btn7 = types.KeyboardButton(lang_data["profile_button"])
+    markup.add(btn1)
+    markup.add(btn2, btn3)
+    markup.add(btn4, btn5)
+    markup.add(btn6, btn7)
     return markup
 
 def admin_keyboard(lang_code):
@@ -115,7 +129,6 @@ def back_keyboard(lang_code):
 def start_command_handler(message):
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
-    # This logic handles download links
     if len(message.text.split()) > 1 and message.text.split()[1].startswith('getfile_'):
         try:
             file_info = message.text.split()[1].replace('getfile_', '')
@@ -135,7 +148,6 @@ def start_command_handler(message):
             print(f"Error in getfile: {e}")
             send_message(message.chat.id, lang_data["download_link_error"])
     else:
-        # Standard start command
         users_collection.update_one({'_id': user_id}, {'$set': {'username': message.from_user.username, 'first_name': message.from_user.first_name}}, upsert=True)
         send_message(message.chat.id, lang_data["start_message"], reply_markup=main_keyboard(DEFAULT_LANGUAGE))
 
@@ -204,7 +216,7 @@ def list_admins_handler(message):
             response_text += f"• `{admin_id}`\n"
     send_message(message.chat.id, response_text, parse_mode="Markdown")
 
-# --- ALL USER HANDLERS ARE NOW INCLUDED ---
+# --- All User Handlers ---
 @bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["upload_button"])
 def upload_button_handler(message):
     user_id = message.from_user.id
@@ -229,7 +241,7 @@ def upload_media_handler(message):
     caption = user_doc.get('caption', lang_data["default_caption"]) if user_doc else lang_data["default_caption"]
     sent_message = bot.copy_message(STORAGE_GROUP_ID, message.chat.id, message.message_id, caption=caption)
     message_id_in_group = sent_message.message_id
-    if user_doc and media_type in user_doc:
+    if user_doc and media_type in user_doc and isinstance(user_doc.get(media_type), dict):
         file_key = str(len(user_doc[media_type]) + 1)
     else:
         file_key = '1'
@@ -302,7 +314,7 @@ def support_handler(message):
     support_message = lang_data["support_message_prefix"].format(first_name=message.from_user.first_name, user_id=user_id) + message.text
     admin_markup = types.InlineKeyboardMarkup()
     admin_markup.add(types.InlineKeyboardButton(text=lang_data["support_answer_button"], callback_data=f"answer_support_{user_id}"))
-    send_message(OWNER_ID, support_message, reply_markup=admin_markup) # Support messages go to the owner
+    send_message(OWNER_ID, support_message, reply_markup=admin_markup)
     send_message(message.chat.id, lang_data["support_message_sent"], reply_markup=main_keyboard(get_user_lang_code(user_id)))
     delete_state(user_id)
 
@@ -335,7 +347,7 @@ def get_file_by_id_handler(message):
         send_message(message.chat.id, lang_data["delete_file_invalid_id"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
         return
     user_doc = users_collection.find_one({'_id': user_id})
-    if not user_doc:
+    if not user__doc:
         send_message(message.chat.id, lang_data["file_not_found"], reply_markup=main_keyboard(get_user_lang_code(user_id)))
         delete_state(user_id)
         return
@@ -361,7 +373,7 @@ def back_button_handler(message):
     delete_state(user_id)
     send_message(message.chat.id, get_user_lang(user_id)["main_menu_back"], reply_markup=main_keyboard(get_user_lang_code(user_id)))
 
-# --- ALL ADMIN HANDLERS NOW USE 'is_admin()' CHECK ---
+# --- Admin Panel Button Handlers ---
 @bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["admin_stats_button"] and is_admin(message.from_user.id))
 def admin_stats_handler(message):
     user_id = message.from_user.id
@@ -395,6 +407,10 @@ def ban_user_message_handler(message):
     lang_data = get_user_lang(user_id)
     try:
         user_id_to_ban = int(message.text)
+        if user_id_to_ban == OWNER_ID:
+            send_message(message.chat.id, "You cannot ban the Bot Owner.")
+            delete_state(user_id)
+            return
         users_collection.update_one({'_id': user_id_to_ban}, {'$set': {'banned': True}}, upsert=True)
         send_message(message.chat.id, lang_data["admin_ban_success"].format(user_id=user_id_to_ban), reply_markup=admin_keyboard(get_user_lang_code(user_id)))
     except ValueError:
@@ -467,9 +483,8 @@ def forward_broadcast_message_handler(message):
     send_message(message.chat.id, lang_data["admin_forward_broadcast_report"].format(success_count=success_count, fail_count=fail_count), reply_markup=admin_keyboard(get_user_lang_code(user_id)))
     delete_state(user_id)
 
-
 # --- Main ---
 if __name__ == "__main__":
-    get_admin_list() # Initialize the admin list on first start
+    get_admin_list() 
     print("Bot starting with MongoDB integration and multi-admin support...")
     bot.infinity_polling()
