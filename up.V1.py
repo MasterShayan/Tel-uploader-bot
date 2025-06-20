@@ -7,6 +7,8 @@ import hashlib
 import random
 import string
 from datetime import datetime
+import threading
+import time
 
 # --- Config (Reading from Heroku Environment) ---
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
@@ -29,14 +31,13 @@ db = client['uploader_bot_db']
 users_collection = db['users']
 admin_collection = db['admin_config']
 redeem_codes_collection = db['redeem_codes']
-files_collection = db['files'] # NEW: Central collection for all files
-counters_collection = db['counters'] # NEW: Collection to manage global counters
+files_collection = db['files']
+counters_collection = db['counters']
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# --- NEW: Helper for Global IDs ---
+# --- Helper for Global IDs ---
 def get_next_sequence_value(sequence_name):
-    """Gets the next value from a counter sequence in an atomic way."""
     sequence_document = counters_collection.find_one_and_update(
         {'_id': sequence_name},
         {'$inc': {'sequence_value': 1}},
@@ -44,7 +45,6 @@ def get_next_sequence_value(sequence_name):
         upsert=True
     )
     return sequence_document['sequence_value']
-
 
 # --- Admin Management Helpers ---
 def get_admin_list():
@@ -66,7 +66,6 @@ def is_admin(user_id):
 
 # --- Language Support ---
 LANGUAGES = {"en": "English"}
-
 def load_language(lang_code):
     try:
         with open(os.path.join("languages", f"{lang_code}.json"), "r", encoding="utf-8") as f:
@@ -74,11 +73,9 @@ def load_language(lang_code):
     except FileNotFoundError:
         with open(os.path.join("languages", f"{DEFAULT_LANGUAGE}.json"), "r", encoding="utf-8") as f:
             return json.load(f)
-
 def get_user_lang_code(user_id):
     user_doc = users_collection.find_one({'_id': user_id}, {'language': 1})
     return user_doc.get('language', DEFAULT_LANGUAGE) if user_doc else DEFAULT_LANGUAGE
-
 def get_user_lang(user_id):
     return load_language(get_user_lang_code(user_id))
 
@@ -89,14 +86,48 @@ def send_message(chat_id, text, reply_markup=None, parse_mode="HTML"):
     except Exception as e:
         print(f"Error sending message to {chat_id}: {e}")
 
+def schedule_message_deletion(chat_id, message_id, delay_seconds):
+    def delete_worker():
+        time.sleep(delay_seconds)
+        try:
+            bot.delete_message(chat_id, message_id)
+        except Exception as e:
+            print(f"Could not delete message {message_id} in chat {chat_id}: {e}")
+    threading.Thread(target=delete_worker).start()
+
 def send_file_by_id(chat_id, file_type, file_id, caption=None):
+    sent_message = None
     try:
-        if file_type == "photo": bot.send_photo(chat_id, file_id, caption=caption)
-        elif file_type == "video": bot.send_video(chat_id, file_id, caption=caption)
-        elif file_type == "document": bot.send_document(chat_id, file_id, caption=caption)
-        elif file_type == "audio" or file_type == "music": bot.send_audio(chat_id, file_id, caption=caption)
+        if file_type == "photo": sent_message = bot.send_photo(chat_id, file_id, caption=caption)
+        elif file_type == "video": sent_message = bot.send_video(chat_id, file_id, caption=caption)
+        elif file_type == "document": sent_message = bot.send_document(chat_id, file_id, caption=caption)
+        elif file_type == "audio" or file_type == "music": sent_message = bot.send_audio(chat_id, file_id, caption=caption)
+        
+        if sent_message:
+            config = admin_collection.find_one({'_id': 'bot_config'}) or {}
+            delay = config.get('auto_delete_seconds', 0)
+            if delay > 0:
+                schedule_message_deletion(chat_id, sent_message.message_id, delay)
     except Exception as e:
         print(f"Error sending file by ID to {chat_id}: {e}")
+    return sent_message
+
+def send_confirmation_disclaimer(chat_id, lang_data):
+    config = admin_collection.find_one({'_id': 'bot_config'}) or {}
+    delay = config.get('auto_delete_seconds', 0)
+    confirmation_message = None
+    if delay > 0:
+        time_str = f"{delay} seconds"
+        if delay >= 3600:
+            hours = delay // 3600; time_str = f"{hours} hour" + ("s" if hours > 1 else "")
+        elif delay >= 60:
+            minutes = delay // 60; time_str = f"{minutes} minute" + ("s" if minutes > 1 else "")
+        confirmation_message = send_message(chat_id, lang_data["file_delivery_success_timed"].format(time=time_str))
+    else:
+        confirmation_message = send_message(chat_id, lang_data["file_delivery_success"])
+    
+    if confirmation_message and delay > 0:
+        schedule_message_deletion(chat_id, confirmation_message.message_id, delay)
 
 # --- State Management ---
 user_states = {}
@@ -133,7 +164,6 @@ def back_keyboard(lang_code):
 def start_command_handler(message):
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
-    # MODIFIED: Logic now checks the central `files` collection for the global ID
     if len(message.text.split()) > 1 and message.text.split()[1].startswith('getfile_'):
         try:
             file_info = message.text.split()[1].replace('getfile_', '')
@@ -236,14 +266,35 @@ def list_admins_handler(message):
             response_text += f"• `{admin_id}`\n"
     send_message(message.chat.id, response_text, parse_mode="Markdown")
 
-# --- All User and State-Based Handlers are routed from here ---
+@bot.message_handler(commands=['set_delete_timer'])
+def set_delete_timer_command_handler(message):
+    if message.from_user.id != OWNER_ID:
+        send_message(message.chat.id, "❌ This command is for the Bot Owner only.")
+        return
+    lang_data = get_user_lang(message.from_user.id)
+    config = admin_collection.find_one({'_id': 'bot_config'}) or {}
+    current_setting = config.get('auto_delete_seconds', 0)
+    send_message(message.chat.id, lang_data["set_delete_timer_prompt"].format(current_setting=current_setting), reply_markup=back_keyboard(get_user_lang_code(message.from_user.id)))
+    set_state(message.from_user.id, "set_delete_timer")
+
+@bot.message_handler(commands=['check_delete_timer'])
+def check_delete_timer_command_handler(message):
+    if message.from_user.id != OWNER_ID:
+        send_message(message.chat.id, "❌ This command is for the Bot Owner only.")
+        return
+    lang_data = get_user_lang(message.from_user.id)
+    config = admin_collection.find_one({'_id': 'bot_config'}) or {}
+    seconds = config.get('auto_delete_seconds', 0)
+    send_message(message.chat.id, lang_data["check_delete_timer_status"].format(seconds=seconds))
+
+# --- State-Based Handlers ---
 @bot.message_handler(content_types=['text', 'photo', 'video', 'document', 'audio'], func=lambda message: get_state(message.from_user.id) is not None)
 def master_state_handler(message):
-    # This single handler routes all messages for users who are in a 'state'
     state = get_state(message.from_user.id)
     if state == "create_code_awaiting_item": create_code_item_handler(message)
     elif state == "create_code_awaiting_limit": create_code_limit_handler(message)
     elif state == "awaiting_redeem_code": redeem_code_handler(message)
+    elif state == "set_delete_timer": set_delete_timer_limit_handler(message)
     elif state == "upload": upload_media_handler(message)
     elif state == "set-caption": set_caption_handler(message)
     elif state == "delete-file": delete_file_handler(message)
@@ -255,9 +306,9 @@ def master_state_handler(message):
         elif state == "broadcast_message": broadcast_message_handler(message)
         elif state == "forward_broadcast_message": forward_broadcast_message_handler(message)
 
+# --- Button Handlers ---
 @bot.message_handler(func=lambda message: message.content_type == 'text')
 def button_handlers(message):
-    # This single handler routes all button clicks
     lang_data = get_user_lang(message.from_user.id)
     text = message.text
     if text == lang_data["upload_button"]: upload_button_handler(message)
@@ -266,7 +317,7 @@ def button_handlers(message):
     elif text == lang_data["support_button"]: support_button_handler(message)
     elif text == lang_data["profile_button"]: profile_button_handler(message)
     elif text == lang_data["get_file_button"]: get_file_button_handler(message)
-    elif text == lang_data["redeem_button"]: redeem_command_and_button_handler(message)
+    elif text == lang_data["redeem_button"]: redeem_command_handler(message)
     elif text == lang_data["back_button"]: back_button_handler(message)
     elif is_admin(message.from_user.id):
         if text == lang_data["admin_stats_button"]: admin_stats_handler(message)
@@ -276,7 +327,7 @@ def button_handlers(message):
         elif text == lang_data["admin_broadcast_button"]: admin_broadcast_handler(message)
         elif text == lang_data["admin_forward_broadcast_button"]: admin_forward_broadcast_handler(message)
 
-# --- Handler Implementations (Helper functions called by the routers above) ---
+# --- Handler Implementations ---
 
 def create_code_item_handler(message):
     user_id = message.from_user.id
@@ -314,12 +365,6 @@ def create_code_limit_handler(message):
     send_message(user_id, lang_data["create_code_success"].format(code=db_document['_id']), reply_markup=main_keyboard(get_user_lang_code(user_id)), parse_mode="Markdown")
     delete_state(user_id)
 
-def redeem_command_and_button_handler(message):
-    user_id = message.from_user.id
-    lang_data = get_user_lang(user_id)
-    send_message(message.chat.id, lang_data["redeem_prompt_code"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
-    set_state(user_id, "awaiting_redeem_code")
-
 def redeem_code_handler(message):
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
@@ -340,10 +385,26 @@ def redeem_code_handler(message):
     redeem_codes_collection.update_one({'_id': user_code}, {'$inc': {'redemption_count': 1}, '$addToSet': {'redeemed_by': user_id}})
     item_type, item_content = code_doc['item_type'], code_doc['item_content']
     if item_type == 'text':
-        send_message(user_id, item_content['text'])
+        sent_message = bot.send_message(user_id, item_content['text'])
+        config = admin_collection.find_one({'_id': 'bot_config'}) or {}
+        delay = config.get('auto_delete_seconds', 0)
+        if delay > 0:
+            schedule_message_deletion(user_id, sent_message.message_id, delay)
     else:
         send_file_by_id(user_id, item_type, item_content['file_id'])
-    send_message(user_id, lang_data["redeem_success"], reply_markup=main_keyboard(get_user_lang_code(user_id)))
+    
+    config = admin_collection.find_one({'_id': 'bot_config'}) or {}
+    delay = config.get('auto_delete_seconds', 0)
+    if delay > 0:
+        time_str = f"{delay} seconds"
+        if delay >= 3600:
+            hours = delay // 3600; time_str = f"{hours} hour" + ("s" if hours > 1 else "")
+        elif delay >= 60:
+            minutes = delay // 60; time_str = f"{minutes} minute" + ("s" if minutes > 1 else "")
+        send_message(user_id, lang_data["redeem_success_timed"].format(time=time_str), reply_markup=main_keyboard(get_user_lang_code(user_id)))
+    else:
+        send_message(user_id, lang_data["redeem_success"], reply_markup=main_keyboard(get_user_lang_code(user_id)))
+    
     try:
         creator_id, user_info = code_doc['creator_id'], users_collection.find_one({'_id': user_id})
         remaining = "Unlimited" if code_doc['redemption_limit'] == 0 else code_doc['redemption_limit'] - (code_doc['redemption_count'] + 1)
@@ -352,6 +413,17 @@ def redeem_code_handler(message):
         send_message(creator_id, notification_text)
     except Exception as e:
         print(f"Failed to send admin notification: {e}")
+    delete_state(user_id)
+
+def set_delete_timer_limit_handler(message):
+    user_id = message.from_user.id
+    lang_data = get_user_lang(user_id)
+    if not message.text.isdigit():
+        send_message(user_id, "Invalid input. Please send a number.")
+        return
+    seconds = int(message.text)
+    admin_collection.update_one({'_id': 'bot_config'},{'$set': {'auto_delete_seconds': seconds}},upsert=True)
+    send_message(user_id, lang_data["set_delete_timer_success"].format(seconds=seconds), reply_markup=main_keyboard(get_user_lang_code(user_id)))
     delete_state(user_id)
 
 def upload_button_handler(message):
@@ -442,7 +514,7 @@ def profile_button_handler(message):
     lang_data = get_user_lang(user_id)
     file_count = files_collection.count_documents({'uploader_id': user_id})
     user_doc = users_collection.find_one({'_id': user_id})
-    first_name = user_doc.get('first_name', 'N/A') if user_doc else message.from_user.first_name
+    first_name = user_doc.get('first_name', message.from_user.first_name) if user_doc else message.from_user.first_name
     profile_text = lang_data["profile_message"].format(first_name=first_name, user_id=user_id, file_count=file_count)
     send_message(message.chat.id, profile_text, reply_markup=main_keyboard(get_user_lang_code(user_id)))
 
@@ -458,10 +530,12 @@ def get_file_by_id_handler(message):
     file_id_to_get = message.text
     if not file_id_to_get.isdigit():
         send_message(message.chat.id, lang_data["delete_file_invalid_id"])
+        delete_state(user_id)
         return
     file_doc = files_collection.find_one({'_id': int(file_id_to_get)})
     if file_doc:
         send_file_by_id(user_id, file_doc["file_type"], file_doc["file_id"])
+        send_confirmation_disclaimer(user_id, lang_data)
     else:
         send_message(user_id, lang_data["file_not_found"])
     delete_state(user_id)
@@ -567,8 +641,7 @@ def forward_broadcast_message_handler(message):
 
 # --- Main ---
 if __name__ == "__main__":
-    # Ensure the counter exists
     counters_collection.update_one({'_id': 'global_file_id'}, {'$setOnInsert': {'sequence_value': 0}}, upsert=True)
     get_admin_list() 
-    print("Bot starting with Global File ID system...")
+    print("Bot starting with all features enabled...")
     bot.infinity_polling()
