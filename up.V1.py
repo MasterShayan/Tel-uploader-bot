@@ -38,11 +38,13 @@ bot = telebot.TeleBot(BOT_TOKEN)
 
 # --- Helper for Global IDs ---
 def get_next_sequence_value(sequence_name):
+    """Gets the next value from a counter sequence in an atomic way."""
+    if counters_collection.find_one({'_id': sequence_name}) is None:
+        counters_collection.insert_one({'_id': sequence_name, 'sequence_value': 0})
     sequence_document = counters_collection.find_one_and_update(
         {'_id': sequence_name},
         {'$inc': {'sequence_value': 1}},
-        return_document=pymongo.ReturnDocument.AFTER,
-        upsert=True
+        return_document=pymongo.ReturnDocument.AFTER
     )
     return sequence_document['sequence_value']
 
@@ -82,9 +84,10 @@ def get_user_lang(user_id):
 # --- Bot Functions ---
 def send_message(chat_id, text, reply_markup=None, parse_mode="HTML"):
     try:
-        bot.send_message(chat_id, text, parse_mode=parse_mode, reply_markup=reply_markup, disable_web_page_preview=True)
+        return bot.send_message(chat_id, text, parse_mode=parse_mode, reply_markup=reply_markup, disable_web_page_preview=True)
     except Exception as e:
         print(f"Error sending message to {chat_id}: {e}")
+        return None
 
 def schedule_message_deletion(chat_id, message_id, delay_seconds):
     def delete_worker():
@@ -112,7 +115,8 @@ def send_file_by_id(chat_id, file_type, file_id, caption=None):
         print(f"Error sending file by ID to {chat_id}: {e}")
     return sent_message
 
-def send_confirmation_disclaimer(chat_id, lang_data):
+def send_confirmation_disclaimer(chat_id):
+    lang_data = get_user_lang(chat_id)
     config = admin_collection.find_one({'_id': 'bot_config'}) or {}
     delay = config.get('auto_delete_seconds', 0)
     confirmation_message = None
@@ -171,6 +175,7 @@ def start_command_handler(message):
             file_doc = files_collection.find_one({'_id': int(global_file_id)})
             if file_doc and file_doc["token"] == token:
                 send_file_by_id(message.chat.id, file_doc["file_type"], file_doc["file_id"])
+                send_confirmation_disclaimer(message.chat.id)
             else:
                 send_message(message.chat.id, lang_data["download_link_error"])
         except Exception as e:
@@ -200,10 +205,18 @@ def create_code_command_handler(message):
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
     if not is_admin(user_id):
-        send_message(message.chat.id, lang_data["admin_panel_access_denied"])
-        return
+        send_message(message.chat.id, lang_data["admin_panel_access_denied"]); return
     send_message(user_id, lang_data["create_code_prompt_item"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
     set_state(user_id, "create_code_awaiting_item")
+
+@bot.message_handler(commands=['createpool'])
+def create_pool_command_handler(message):
+    user_id = message.from_user.id
+    lang_data = get_user_lang(user_id)
+    if not is_admin(user_id):
+        send_message(message.chat.id, lang_data["admin_panel_access_denied"]); return
+    send_message(user_id, lang_data["create_pool_prompt_items"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
+    set_state(user_id, "create_pool_awaiting_items")
 
 @bot.message_handler(commands=['redeem'])
 def redeem_command_handler(message):
@@ -212,36 +225,27 @@ def redeem_command_handler(message):
     send_message(message.chat.id, lang_data["redeem_prompt_code"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
     set_state(user_id, "awaiting_redeem_code")
 
-@bot.message_handler(commands=['addadmin', 'removeadmin', 'listadmins'])
-def admin_management_commands(message):
-    command = message.text.split()[0].lower()
-    if command == '/addadmin': add_admin_handler(message)
-    elif command == '/removeadmin': remove_admin_handler(message)
-    elif command == '/listadmins': list_admins_handler(message)
-
+@bot.message_handler(commands=['addadmin'])
 def add_admin_handler(message):
     if message.from_user.id != OWNER_ID:
-        send_message(message.chat.id, "❌ This command can only be used by the Bot Owner.")
-        return
+        send_message(message.chat.id, "❌ This command can only be used by the Bot Owner."); return
     try:
         target_id = int(message.text.split()[1])
         if is_admin(target_id):
-            send_message(message.chat.id, f"User {target_id} is already an admin.")
-            return
+            send_message(message.chat.id, f"User {target_id} is already an admin."); return
         admin_collection.update_one({'_id': 'bot_config'}, {'$addToSet': {'admin_ids': target_id}}, upsert=True)
         send_message(message.chat.id, f"✅ User {target_id} has been promoted to admin.")
     except (IndexError, ValueError):
         send_message(message.chat.id, "Please use the correct format: `/addadmin <user_id>`")
 
+@bot.message_handler(commands=['removeadmin'])
 def remove_admin_handler(message):
     if message.from_user.id != OWNER_ID:
-        send_message(message.chat.id, "❌ This command can only be used by the Bot Owner.")
-        return
+        send_message(message.chat.id, "❌ This command can only be used by the Bot Owner."); return
     try:
         target_id = int(message.text.split()[1])
         if target_id == OWNER_ID:
-            send_message(message.chat.id, "You cannot remove the Bot Owner.")
-            return
+            send_message(message.chat.id, "You cannot remove the Bot Owner."); return
         result = admin_collection.update_one({'_id': 'bot_config'}, {'$pull': {'admin_ids': target_id}})
         if result.modified_count > 0:
             send_message(message.chat.id, f"🗑️ User {target_id} has been removed from admins.")
@@ -250,14 +254,13 @@ def remove_admin_handler(message):
     except (IndexError, ValueError):
         send_message(message.chat.id, "Please use the correct format: `/removeadmin <user_id>`")
 
+@bot.message_handler(commands=['listadmins'])
 def list_admins_handler(message):
     if not is_admin(message.from_user.id):
-        send_message(message.chat.id, get_user_lang(message.from_user.id)["admin_panel_access_denied"])
-        return
+        send_message(message.chat.id, get_user_lang(message.from_user.id)["admin_panel_access_denied"]); return
     admin_list = get_admin_list()
     if not admin_list:
-        send_message(message.chat.id, "There are currently no admins configured.")
-        return
+        send_message(message.chat.id, "There are currently no admins configured."); return
     response_text = "👑 **Current Bot Admins** 👑\n\n"
     for admin_id in admin_list:
         if admin_id == OWNER_ID:
@@ -269,8 +272,7 @@ def list_admins_handler(message):
 @bot.message_handler(commands=['set_delete_timer'])
 def set_delete_timer_command_handler(message):
     if message.from_user.id != OWNER_ID:
-        send_message(message.chat.id, "❌ This command is for the Bot Owner only.")
-        return
+        send_message(message.chat.id, "❌ This command is for the Bot Owner only."); return
     lang_data = get_user_lang(message.from_user.id)
     config = admin_collection.find_one({'_id': 'bot_config'}) or {}
     current_setting = config.get('auto_delete_seconds', 0)
@@ -280,55 +282,14 @@ def set_delete_timer_command_handler(message):
 @bot.message_handler(commands=['check_delete_timer'])
 def check_delete_timer_command_handler(message):
     if message.from_user.id != OWNER_ID:
-        send_message(message.chat.id, "❌ This command is for the Bot Owner only.")
-        return
+        send_message(message.chat.id, "❌ This command is for the Bot Owner only."); return
     lang_data = get_user_lang(message.from_user.id)
     config = admin_collection.find_one({'_id': 'bot_config'}) or {}
     seconds = config.get('auto_delete_seconds', 0)
     send_message(message.chat.id, lang_data["check_delete_timer_status"].format(seconds=seconds))
 
-# --- State-Based Handlers ---
-@bot.message_handler(content_types=['text', 'photo', 'video', 'document', 'audio'], func=lambda message: get_state(message.from_user.id) is not None)
-def master_state_handler(message):
-    state = get_state(message.from_user.id)
-    if state == "create_code_awaiting_item": create_code_item_handler(message)
-    elif state == "create_code_awaiting_limit": create_code_limit_handler(message)
-    elif state == "awaiting_redeem_code": redeem_code_handler(message)
-    elif state == "set_delete_timer": set_delete_timer_limit_handler(message)
-    elif state == "upload": upload_media_handler(message)
-    elif state == "set-caption": set_caption_handler(message)
-    elif state == "delete-file": delete_file_handler(message)
-    elif state == "get_file_by_id": get_file_by_id_handler(message)
-    elif state == "support": support_handler(message)
-    elif is_admin(message.from_user.id):
-        if state == "ban_user": ban_user_message_handler(message)
-        elif state == "unban_user": unban_user_message_handler(message)
-        elif state == "broadcast_message": broadcast_message_handler(message)
-        elif state == "forward_broadcast_message": forward_broadcast_message_handler(message)
-
-# --- Button Handlers ---
-@bot.message_handler(func=lambda message: message.content_type == 'text')
-def button_handlers(message):
-    lang_data = get_user_lang(message.from_user.id)
-    text = message.text
-    if text == lang_data["upload_button"]: upload_button_handler(message)
-    elif text == lang_data["caption_button"]: caption_button_handler(message)
-    elif text == lang_data["delete_button"]: delete_button_handler(message)
-    elif text == lang_data["support_button"]: support_button_handler(message)
-    elif text == lang_data["profile_button"]: profile_button_handler(message)
-    elif text == lang_data["get_file_button"]: get_file_button_handler(message)
-    elif text == lang_data["redeem_button"]: redeem_command_handler(message)
-    elif text == lang_data["back_button"]: back_button_handler(message)
-    elif is_admin(message.from_user.id):
-        if text == lang_data["admin_stats_button"]: admin_stats_handler(message)
-        elif text == lang_data["admin_bot_status_button"]: admin_bot_status_handler(message)
-        elif text == lang_data["admin_ban_button"]: admin_ban_handler(message)
-        elif text == lang_data["admin_unban_button"]: admin_unban_handler(message)
-        elif text == lang_data["admin_broadcast_button"]: admin_broadcast_handler(message)
-        elif text == lang_data["admin_forward_broadcast_button"]: admin_forward_broadcast_handler(message)
-
-# --- Handler Implementations ---
-
+# --- Handlers for conversational states ---
+@bot.message_handler(content_types=['text', 'photo', 'video', 'document', 'audio'], func=lambda message: get_state(message.from_user.id) == "create_code_awaiting_item")
 def create_code_item_handler(message):
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
@@ -345,6 +306,7 @@ def create_code_item_handler(message):
     send_message(user_id, lang_data["create_code_prompt_limit"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
     set_state(user_id, "create_code_awaiting_limit", data=prize_data)
 
+@bot.message_handler(content_types=['text'], func=lambda message: get_state(message.from_user.id) == "create_code_awaiting_limit")
 def create_code_limit_handler(message):
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
@@ -352,86 +314,122 @@ def create_code_limit_handler(message):
     if not message.text.isdigit():
         send_message(user_id, "❌ Invalid number. Please enter a number for the redemption limit.")
         return
-    def generate_redeem_code():
+    def generate_redeem_code(pool=False):
         while True:
-            code = '-'.join(''.join(random.choices(string.ascii_uppercase + string.digits, k=4)) for _ in range(3))
+            prefix = "POOL-" if pool else ""
+            k_range = 2 if pool else 3
+            code = prefix + '-'.join(''.join(random.choices(string.ascii_uppercase + string.digits, k=4)) for _ in range(k_range))
             if redeem_codes_collection.find_one({'_id': code}) is None: return code
+    is_pool = 'codes' in prize_data
+    new_code = generate_redeem_code(pool=is_pool)
     db_document = {
-        '_id': generate_redeem_code(), 'item_type': prize_data['type'], 'item_content': prize_data['content'],
-        'redemption_limit': int(message.text), 'redemption_count': 0, 'redeemed_by': [],
-        'creator_id': user_id, 'created_at': datetime.utcnow()
+        '_id': new_code, 'item_type': 'code_pool' if is_pool else prize_data['type'],
+        'item_content': prize_data, 'redemption_limit': int(message.text),
+        'redemption_count': 0, 'redeemed_by': [], 'creator_id': user_id, 'created_at': datetime.utcnow()
     }
     redeem_codes_collection.insert_one(db_document)
-    send_message(user_id, lang_data["create_code_success"].format(code=db_document['_id']), reply_markup=main_keyboard(get_user_lang_code(user_id)), parse_mode="Markdown")
+    success_message = lang_data["create_pool_success"] if is_pool else lang_data["create_code_success"]
+    send_message(user_id, success_message.format(code=db_document['_id']), reply_markup=main_keyboard(get_user_lang_code(user_id)), parse_mode="Markdown")
     delete_state(user_id)
 
+@bot.message_handler(content_types=['text'], func=lambda message: get_state(message.from_user.id) == "create_pool_awaiting_items")
+def create_pool_items_handler(message):
+    user_id = message.from_user.id
+    lang_data = get_user_lang(user_id)
+    if not message.text or message.text.startswith('/'):
+        send_message(user_id, "Invalid input. Please provide a list of codes, each on a new line.")
+        return
+    prize_codes = [line.strip() for line in message.text.splitlines() if line.strip()]
+    if not prize_codes:
+        send_message(user_id, "Invalid input. The list of codes cannot be empty.")
+        return
+    item_count = len(prize_codes)
+    prize_data = {'codes': prize_codes}
+    send_message(user_id, lang_data["create_pool_prompt_limit"].format(item_count=item_count), reply_markup=back_keyboard(get_user_lang_code(user_id)))
+    set_state(user_id, "create_code_awaiting_limit", data=prize_data)
+
+@bot.message_handler(content_types=['text'], func=lambda message: get_state(message.from_user.id) == "awaiting_redeem_code")
 def redeem_code_handler(message):
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
     user_code = message.text.strip().upper()
     code_doc = redeem_codes_collection.find_one({'_id': user_code})
     if not code_doc:
-        send_message(user_id, lang_data["redeem_error_not_found"], reply_markup=main_keyboard(get_user_lang_code(user_id)))
-        delete_state(user_id)
-        return
+        send_message(user_id, lang_data["redeem_error_not_found"], reply_markup=main_keyboard(get_user_lang_code(user_id))); delete_state(user_id); return
     if user_id in code_doc.get('redeemed_by', []):
-        send_message(user_id, lang_data["redeem_error_already_claimed"], reply_markup=main_keyboard(get_user_lang_code(user_id)))
-        delete_state(user_id)
-        return
+        send_message(user_id, lang_data["redeem_error_already_claimed"], reply_markup=main_keyboard(get_user_lang_code(user_id))); delete_state(user_id); return
     if code_doc['redemption_limit'] != 0 and code_doc['redemption_count'] >= code_doc['redemption_limit']:
-        send_message(user_id, lang_data["redeem_error_limit_reached"], reply_markup=main_keyboard(get_user_lang_code(user_id)))
-        delete_state(user_id)
-        return
-    redeem_codes_collection.update_one({'_id': user_code}, {'$inc': {'redemption_count': 1}, '$addToSet': {'redeemed_by': user_id}})
-    item_type, item_content = code_doc['item_type'], code_doc['item_content']
-    if item_type == 'text':
-        sent_message = bot.send_message(user_id, item_content['text'])
+        send_message(user_id, lang_data["redeem_error_limit_reached"], reply_markup=main_keyboard(get_user_lang_code(user_id))); delete_state(user_id); return
+    
+    item_type = code_doc['item_type']
+    prize_message_sent = False
+    
+    if item_type == 'code_pool':
+        if not code_doc.get('item_content', {}).get('codes'):
+            send_message(user_id, lang_data["redeem_error_pool_empty"], reply_markup=main_keyboard(get_user_lang_code(user_id))); delete_state(user_id); return
+        updated_doc = redeem_codes_collection.find_one_and_update(
+            {'_id': user_code}, {'$pop': {'item_content.codes': -1}}
+        )
+        prize_text = updated_doc['item_content']['codes'][0]
+        sent_message = send_message(user_id, prize_text)
+        if sent_message:
+            prize_message_sent = True
+            config = admin_collection.find_one({'_id': 'bot_config'}) or {}
+            delay = config.get('auto_delete_seconds', 0)
+            if delay > 0: schedule_message_deletion(user_id, sent_message.message_id, delay)
+    else:
+        item_content = code_doc['item_content']
+        if item_type == 'text':
+            sent_message = send_message(user_id, item_content['content']['text'])
+            if sent_message:
+                prize_message_sent = True
+                config = admin_collection.find_one({'_id': 'bot_config'}) or {}
+                delay = config.get('auto_delete_seconds', 0)
+                if delay > 0: schedule_message_deletion(user_id, sent_message.message_id, delay)
+        else:
+            sent_message = send_file_by_id(user_id, item_type, item_content['content']['file_id'])
+            if sent_message: prize_message_sent = True
+
+    if prize_message_sent:
+        redeem_codes_collection.update_one({'_id': user_code}, {'$inc': {'redemption_count': 1}, '$addToSet': {'redeemed_by': user_id}})
         config = admin_collection.find_one({'_id': 'bot_config'}) or {}
         delay = config.get('auto_delete_seconds', 0)
         if delay > 0:
-            schedule_message_deletion(user_id, sent_message.message_id, delay)
-    else:
-        send_file_by_id(user_id, item_type, item_content['file_id'])
+            time_str = f"{delay} seconds"
+            if delay >= 3600: hours = delay // 3600; time_str = f"{hours} hour" + ("s" if hours > 1 else "")
+            elif delay >= 60: minutes = delay // 60; time_str = f"{minutes} minute" + ("s" if minutes > 1 else "")
+            send_message(user_id, lang_data["redeem_success_timed"].format(time=time_str), reply_markup=main_keyboard(get_user_lang_code(user_id)))
+        else:
+            send_message(user_id, lang_data["redeem_success"], reply_markup=main_keyboard(get_user_lang_code(user_id)))
+        try:
+            creator_id, user_info = code_doc['creator_id'], users_collection.find_one({'_id': user_id})
+            remaining = "Unlimited" if code_doc['redemption_limit'] == 0 else code_doc['redemption_limit'] - (code_doc['redemption_count'] + 1)
+            username = user_info.get('username', 'N/A') if user_info else 'N/A'
+            notification_text = lang_data["admin_redeem_notification"].format(username=username, user_id=user_id, code=user_code, remaining=remaining)
+            send_message(creator_id, notification_text)
+        except Exception as e: print(f"Failed to send admin notification: {e}")
     
-    config = admin_collection.find_one({'_id': 'bot_config'}) or {}
-    delay = config.get('auto_delete_seconds', 0)
-    if delay > 0:
-        time_str = f"{delay} seconds"
-        if delay >= 3600:
-            hours = delay // 3600; time_str = f"{hours} hour" + ("s" if hours > 1 else "")
-        elif delay >= 60:
-            minutes = delay // 60; time_str = f"{minutes} minute" + ("s" if minutes > 1 else "")
-        send_message(user_id, lang_data["redeem_success_timed"].format(time=time_str), reply_markup=main_keyboard(get_user_lang_code(user_id)))
-    else:
-        send_message(user_id, lang_data["redeem_success"], reply_markup=main_keyboard(get_user_lang_code(user_id)))
-    
-    try:
-        creator_id, user_info = code_doc['creator_id'], users_collection.find_one({'_id': user_id})
-        remaining = "Unlimited" if code_doc['redemption_limit'] == 0 else code_doc['redemption_limit'] - (code_doc['redemption_count'] + 1)
-        username = user_info.get('username', 'N/A') if user_info else 'N/A'
-        notification_text = lang_data["admin_redeem_notification"].format(username=username, user_id=user_id, code=user_code, remaining=remaining)
-        send_message(creator_id, notification_text)
-    except Exception as e:
-        print(f"Failed to send admin notification: {e}")
     delete_state(user_id)
 
+@bot.message_handler(content_types=['text'], func=lambda message: get_state(message.from_user.id) == "set_delete_timer")
 def set_delete_timer_limit_handler(message):
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
     if not message.text.isdigit():
-        send_message(user_id, "Invalid input. Please send a number.")
-        return
+        send_message(user_id, "Invalid input. Please send a number."); return
     seconds = int(message.text)
     admin_collection.update_one({'_id': 'bot_config'},{'$set': {'auto_delete_seconds': seconds}},upsert=True)
     send_message(user_id, lang_data["set_delete_timer_success"].format(seconds=seconds), reply_markup=main_keyboard(get_user_lang_code(user_id)))
     delete_state(user_id)
 
+@bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["upload_button"])
 def upload_button_handler(message):
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
     send_message(message.chat.id, lang_data["upload_request_message"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
     set_state(user_id, "upload")
 
+@bot.message_handler(content_types=['photo', 'video', 'document', 'audio'], func=lambda message: get_state(message.from_user.id) == "upload")
 def upload_media_handler(message):
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
@@ -456,6 +454,7 @@ def upload_media_handler(message):
     send_message(message.chat.id, lang_data["upload_success_message"].format(file_id=global_file_id, download_link=download_link), reply_markup=main_keyboard(get_user_lang_code(user_id)))
     delete_state(user_id)
 
+@bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["caption_button"])
 def caption_button_handler(message):
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
@@ -464,25 +463,27 @@ def caption_button_handler(message):
     send_message(message.chat.id, lang_data["caption_request_message"].format(current_caption=current_caption), reply_markup=back_keyboard(get_user_lang_code(user_id)))
     set_state(user_id, "set-caption")
 
+@bot.message_handler(content_types=['text'], func=lambda message: get_state(message.from_user.id) == "set-caption")
 def set_caption_handler(message):
     user_id = message.from_user.id
     users_collection.update_one({'_id': user_id}, {'$set': {'caption': message.text}}, upsert=True)
     send_message(message.chat.id, get_user_lang(user_id)["caption_saved_message"], reply_markup=main_keyboard(get_user_lang_code(user_id)))
     delete_state(user_id)
 
+@bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["delete_button"])
 def delete_button_handler(message):
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
     send_message(message.chat.id, lang_data["delete_file_request_message"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
     set_state(user_id, "delete-file")
 
+@bot.message_handler(content_types=['text'], func=lambda message: get_state(message.from_user.id) == "delete-file")
 def delete_file_handler(message):
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
     file_id_to_delete = message.text
     if not file_id_to_delete.isdigit():
-        send_message(message.chat.id, lang_data["delete_file_invalid_id"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
-        return
+        send_message(message.chat.id, lang_data["delete_file_invalid_id"], reply_markup=back_keyboard(get_user_lang_code(user_id))); return
     file_doc = files_collection.find_one({'_id': int(file_id_to_delete)})
     if file_doc and (file_doc['uploader_id'] == user_id or is_admin(user_id)):
         files_collection.delete_one({'_id': int(file_id_to_delete)})
@@ -493,12 +494,14 @@ def delete_file_handler(message):
         send_message(message.chat.id, lang_data["file_not_found"], reply_markup=main_keyboard(get_user_lang_code(user_id)))
     delete_state(user_id)
 
+@bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["support_button"])
 def support_button_handler(message):
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
     send_message(message.chat.id, lang_data["support_message_request"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
     set_state(user_id, "support")
 
+@bot.message_handler(content_types=['text'], func=lambda message: get_state(message.from_user.id) == "support")
 def support_handler(message):
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
@@ -509,6 +512,7 @@ def support_handler(message):
     send_message(message.chat.id, lang_data["support_message_sent"], reply_markup=main_keyboard(get_user_lang_code(user_id)))
     delete_state(user_id)
 
+@bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["profile_button"])
 def profile_button_handler(message):
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
@@ -518,34 +522,40 @@ def profile_button_handler(message):
     profile_text = lang_data["profile_message"].format(first_name=first_name, user_id=user_id, file_count=file_count)
     send_message(message.chat.id, profile_text, reply_markup=main_keyboard(get_user_lang_code(user_id)))
 
+@bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["get_file_button"])
 def get_file_button_handler(message):
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
     send_message(message.chat.id, lang_data["get_file_request_message"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
     set_state(user_id, "get_file_by_id")
 
+@bot.message_handler(content_types=['text'], func=lambda message: get_state(message.from_user.id) == "get_file_by_id")
 def get_file_by_id_handler(message):
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
     file_id_to_get = message.text
     if not file_id_to_get.isdigit():
-        send_message(message.chat.id, lang_data["delete_file_invalid_id"])
-        delete_state(user_id)
-        return
+        send_message(message.chat.id, lang_data["delete_file_invalid_id"]); delete_state(user_id); return
     file_doc = files_collection.find_one({'_id': int(file_id_to_get)})
     if file_doc:
         send_file_by_id(user_id, file_doc["file_type"], file_doc["file_id"])
-        send_confirmation_disclaimer(user_id, lang_data)
+        send_confirmation_disclaimer(user_id)
     else:
         send_message(user_id, lang_data["file_not_found"])
     delete_state(user_id)
     send_message(message.chat.id, lang_data["main_menu_back"], reply_markup=main_keyboard(get_user_lang_code(user_id)))
 
+@bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["back_button"])
 def back_button_handler(message):
     user_id = message.from_user.id
     delete_state(user_id)
     send_message(message.chat.id, get_user_lang(user_id)["main_menu_back"], reply_markup=main_keyboard(get_user_lang_code(user_id)))
 
+@bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["redeem_button"])
+def redeem_button_handler(message):
+    redeem_command_handler(message)
+
+@bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["admin_stats_button"] and is_admin(message.from_user.id))
 def admin_stats_handler(message):
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
@@ -555,6 +565,7 @@ def admin_stats_handler(message):
     stats_text = lang_data["admin_stats_message"].format(user_count=user_count, bot_status=bot_status)
     send_message(message.chat.id, stats_text, reply_markup=admin_keyboard(get_user_lang_code(user_id)))
 
+@bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["admin_bot_status_button"] and is_admin(message.from_user.id))
 def admin_bot_status_handler(message):
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
@@ -564,12 +575,14 @@ def admin_bot_status_handler(message):
     admin_collection.update_one({'_id': 'bot_config'}, {'$set': {'bot_status': new_status}}, upsert=True)
     send_message(message.chat.id, lang_data["admin_bot_status_changed"].format(bot_status=new_status), reply_markup=admin_keyboard(get_user_lang_code(user_id)))
 
+@bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["admin_ban_button"] and is_admin(message.from_user.id))
 def admin_ban_handler(message):
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
     send_message(message.chat.id, lang_data["admin_ban_request"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
     set_state(user_id, "ban_user")
 
+@bot.message_handler(content_types=['text'], func=lambda message: get_state(message.from_user.id) == "ban_user" and is_admin(message.from_user.id))
 def ban_user_message_handler(message):
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
@@ -577,20 +590,21 @@ def ban_user_message_handler(message):
         user_id_to_ban = int(message.text)
         if user_id_to_ban == OWNER_ID or is_admin(user_id_to_ban):
             send_message(message.chat.id, "You cannot ban an admin or the Bot Owner.")
-            delete_state(user_id)
-            return
+            delete_state(user_id); return
         users_collection.update_one({'_id': user_id_to_ban}, {'$set': {'banned': True}}, upsert=True)
         send_message(message.chat.id, lang_data["admin_ban_success"].format(user_id=user_id_to_ban), reply_markup=admin_keyboard(get_user_lang_code(user_id)))
     except ValueError:
         send_message(message.chat.id, lang_data["admin_invalid_user_id"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
     delete_state(user_id)
 
+@bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["admin_unban_button"] and is_admin(message.from_user.id))
 def admin_unban_handler(message):
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
     send_message(message.chat.id, lang_data["admin_unban_request"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
     set_state(user_id, "unban_user")
 
+@bot.message_handler(content_types=['text'], func=lambda message: get_state(message.from_user.id) == "unban_user" and is_admin(message.from_user.id))
 def unban_user_message_handler(message):
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
@@ -605,12 +619,14 @@ def unban_user_message_handler(message):
         send_message(message.chat.id, lang_data["admin_invalid_user_id"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
     delete_state(user_id)
 
+@bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["admin_broadcast_button"] and is_admin(message.from_user.id))
 def admin_broadcast_handler(message):
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
     send_message(message.chat.id, lang_data["admin_broadcast_request"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
     set_state(user_id, "broadcast_message")
 
+@bot.message_handler(content_types=['text'], func=lambda message: get_state(message.from_user.id) == "broadcast_message" and is_admin(message.from_user.id))
 def broadcast_message_handler(message):
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
@@ -622,12 +638,14 @@ def broadcast_message_handler(message):
     send_message(message.chat.id, lang_data["admin_broadcast_report"].format(success_count=success_count, fail_count=fail_count), reply_markup=admin_keyboard(get_user_lang_code(user_id)))
     delete_state(user_id)
 
+@bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["admin_forward_broadcast_button"] and is_admin(message.from_user.id))
 def admin_forward_broadcast_handler(message):
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
     send_message(message.chat.id, lang_data["admin_forward_broadcast_request"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
     set_state(user_id, "forward_broadcast_message")
 
+@bot.message_handler(content_types=['any'], func=lambda message: get_state(message.from_user.id) == "forward_broadcast_message" and is_admin(message.from_user.id))
 def forward_broadcast_message_handler(message):
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
