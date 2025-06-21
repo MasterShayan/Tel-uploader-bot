@@ -1,4 +1,3 @@
-cat <<'EOF' > README.md
 # 🚀 Advanced File Management & Giveaway Bot
 
 [![Python](https://img.shields.io/badge/Python-3.11+-blue?style=for-the-badge&logo=python)](https://www.python.org/)
@@ -146,4 +145,3 @@ Under the following terms:
 * **NoDerivatives** — If you remix, transform, or build upon the material, you may not distribute the modified material.
 
 For more details, see the [full license](https://creativecommons.org/licenses/by-nc-nd/4.0/).
-EOF
