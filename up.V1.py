@@ -140,12 +140,11 @@ def get_state(user_id): return user_states.get(user_id, {}).get('state')
 def get_state_data(user_id): return user_states.get(user_id, {}).get('data')
 def delete_state(user_id): user_states.pop(user_id, None)
 
-# --- Force Subscription (Private/Public, Forwarded Message, Verify Button) ---
+# --- Force Subscription (OWNER ONLY for add/remove/list) ---
 @bot.message_handler(commands=['addforcesub'])
 def add_forcesub_handler(message):
-    if not is_admin(message.from_user.id):
-        send_message(message.chat.id, "You are not authorized to use this command.")
-        return
+    if message.from_user.id != OWNER_ID:
+        send_message(message.chat.id, "Only the bot owner can use this command."); return
     send_message(message.chat.id, "Please forward a message from the channel you want to add for force subscription.")
     set_state(message.from_user.id, "awaiting_forwardsub")
 
@@ -171,8 +170,8 @@ def handle_forwarded_channel_message(message):
 
 @bot.message_handler(commands=['removeforcesub'])
 def remove_forcesub_handler(message):
-    if not is_admin(message.from_user.id):
-        send_message(message.chat.id, "You are not authorized to use this command."); return
+    if message.from_user.id != OWNER_ID:
+        send_message(message.chat.id, "Only the bot owner can use this command."); return
     args = message.text.split()
     if len(args) < 2:
         send_message(message.chat.id, "Usage: /removeforcesub @channelusername or channel_id"); return
@@ -195,8 +194,8 @@ def remove_forcesub_handler(message):
 
 @bot.message_handler(commands=['listforcesub'])
 def list_forcesub_handler(message):
-    if not is_admin(message.from_user.id):
-        send_message(message.chat.id, "You are not authorized to use this command."); return
+    if message.from_user.id != OWNER_ID:
+        send_message(message.chat.id, "Only the bot owner can use this command."); return
     config = admin_collection.find_one({'_id': 'bot_config'}) or {}
     channels = config.get("force_sub_channel", [])
     if isinstance(channels, str):
@@ -485,7 +484,6 @@ def check_delete_timer_command_handler(message):
     seconds = config.get('auto_delete_seconds', 0)
     send_message(message.chat.id, lang_data["check_delete_timer_status"].format(seconds=seconds))
 
-# --- Handlers for conversational states and user flows ---
 @bot.message_handler(content_types=['text', 'photo', 'video', 'document', 'audio'], func=lambda message: get_state(message.from_user.id) == "create_code_awaiting_item")
 def create_code_item_handler(message):
     if not force_sub_check(message):
@@ -622,8 +620,8 @@ def upload_button_handler(message):
         return
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
-    send_message(message.chat.id, lang_data["upload_request_message"], reply_markup=back_keyboard(get_user极lang_code(user_id)))
-    set_state(user_id, "upload")
+    send_message(message.chat.id, lang_data["upload_request_message"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
+   极 set_state(user_id, "upload")
 
 @bot.message_handler(content_types=['photo', 'video', 'document', 'audio'], func=lambda message: get_state(message.from_user.id) == "upload")
 def upload_media_handler(message):
@@ -647,7 +645,7 @@ def upload_media_handler(message):
         'file_type': media_type, 'message_id_in_storage': sent_message.message_id,
         'token': token, 'created_at': datetime.utcnow()
     }
-    files_collection.insert_one(file极doc)
+    files_collection.insert_one(file_doc)
     download_link = f"https://t.me/{bot.get_me().username}?start=getfile_{global_file_id}_{token}"
     send_message(message.chat.id, lang_data["upload_success_message"].format(file_id=global_file_id, download_link=download_link), reply_markup=main_keyboard(get_user_lang_code(user_id)))
     delete_state(user_id)
@@ -659,11 +657,11 @@ def caption_button_handler(message):
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
     user_doc = users_collection.find_one({'_id': user_id}, {'caption': 1})
-    current_caption = user_doc.get('caption', lang_data["default_caption"]) if user_doc else lang_data["default_caption"]
+    current_caption = user_d极oc.get('caption', lang_data["default_caption"]) if user_doc else lang_data["default_caption"]
     send_message(message.chat.id, lang_data["caption_request_message"].format(current_caption=current_caption), reply_markup=back_keyboard(get_user_lang_code(user_id)))
     set_state(user_id, "set-caption")
 
-@bot.message_handler(content_types=['text'], func=lambda message: get_state(message.from_user.id) == "set-caption")
+@bot.message_handler(content_types=['text'], func=lambda message: get_state(message.from_user.id) == "极set-caption")
 def set_caption_handler(message):
     if not force_sub_check(message):
         return
@@ -706,7 +704,7 @@ def support_button_handler(message):
         return
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
-    send_message(message.chat.id极, lang_data["support_message_request"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
+    send_message(message.chat.id, lang_data["support_message_request"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
     set_state(user_id, "support")
 
 @bot.message_handler(content_types=['text'], func=lambda message: get_state(message.from_user.id) == "support")
@@ -794,7 +792,7 @@ def admin_bot_status_handler(message):
     config = admin_collection.find_one({'_id': 'bot_config'}) or {}
     current_status = config.get("bot_status", lang_data["bot_status_on"])
     new_status = lang_data["bot_status_on"] if current_status == lang_data["bot_status_off"] else lang_data["bot_status_off"]
-    admin_collection.update_one({'_极id': 'bot_config'}, {'$set': {'bot_status': new_status}}, upsert=True)
+    admin_collection.update_one({'_id': 'bot_config'}, {'$set': {'bot_status': new_status}}, upsert=True)
     send_message(message.chat.id, lang_data["admin_bot_status_changed"].format(bot_status=new_status), reply_markup=admin_keyboard(get_user_lang_code(user_id)))
 
 @bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["admin_ban_button"] and is_admin(message.from_user.id))
@@ -808,10 +806,10 @@ def admin_ban_handler(message):
 
 @bot.message_handler(content_types=['text'], func=lambda message: get_state(message.from_user.id) == "ban_user" and is_admin(message.from_user.id))
 def ban_user_message_handler(message):
-    if not force_sub_check(message):
+    if not force_sub_check极(message):
         return
     user_id = message.from_user.id
-    lang_data = get_user_lang(user_id)
+    lang_data = get_user_lang(user极id)
     try:
         user_id_to_ban = int(message.text)
         if user_id_to_ban == OWNER_ID or is_admin(user_id_to_ban):
@@ -855,7 +853,7 @@ def admin_broadcast_handler(message):
         return
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
-    send_message(message.chat.id, lang极data["admin_broadcast_request"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
+    send_message(message.chat.id, lang_data["admin_broadcast_request"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
     set_state(user_id, "broadcast_message")
 
 @bot.message_handler(content_types=['text'], func=lambda message: get_state(message.from_user.id) == "broadcast_message" and is_admin(message.from_user.id))
