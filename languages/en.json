@@ -77,5 +77,15 @@
     "admin_broadcast_request": "📢 Enter broadcast message:",
     "admin_broadcast_report": "📢 Broadcast Report:\n\n✅ Successful: {success_count}\n❌ Failed: {fail_count}",
     "admin_forward_broadcast_request": "📤 Send message for forward broadcast:",
-    "admin_forward_broadcast_report": "📤 Forward Broadcast Report:\n\n✅ Successful: {success_count}\n❌ Failed: {fail_count}"
+    "admin_forward_broadcast_report": "📤 Forward Broadcast Report:\n\n✅ Successful: {success_count}\n❌ Failed: {fail_count}",
+    "force_sub_required": "⛔ You must join these channels to use this bot:",
+    "force_sub_verify_button": "✅ Verify Subscription",
+    "force_sub_success": "✅ Access granted! You can now use the bot.",
+    "force_sub_failure": "❌ You haven't joined all required channels. Please join all channels and try again.",
+    "force_sub_admin_add_success": "✅ Channel added to force subscription list.",
+    "force_sub_admin_remove_success": "✅ Channel removed from force subscription list.",
+    "force_sub_list_header": "📋 Force Subscription Channels:",
+    "force_sub_add_prompt": "Send channel ID to add (bot must be admin in channel):",
+    "force_sub_remove_prompt": "Send channel ID to remove:",
+    "force_sub_channel_entry": "- {title} (ID: `{id}`)\n  Join: {invite_link}"
 }

@@ -5,7 +5,7 @@
 [![Telegram](https://img.shields.io/badge/Telegram-2CA5E0?style=for-the-badge&logo=telegram)](https://telegram.org/)
 [![License: CC BY-NC-ND 4.0](https://img.shields.io/badge/License-CC%20BY--NC--ND%204.0-lightgrey.svg?style=for-the-badge)](https://creativecommons.org/licenses/by-nc-nd/4.0/)
 
-This is an advanced, feature-rich Telegram bot built with Python and `pyTelegramBotAPI`. It provides robust file management, a unique redeem code/giveaway system, and dynamic multi-admin controls, all powered by a persistent MongoDB database backend for permanent data storage.
+This is an advanced, feature-rich Telegram bot built with Python and `pyTelegramBotAPI`. It provides robust file management, a unique redeem code/giveaway system, dynamic multi-admin controls, and a modern force-subscription system—all powered by a persistent MongoDB database backend for permanent data storage.
 
 This project has been significantly upgraded from its original version to be a scalable and professional application suitable for cloud deployment.
 
@@ -22,6 +22,22 @@ This project has been significantly upgraded from its original version to be a s
     * Supports multiple administrators with different permission levels.
     * A designated "Bot Owner" can add or remove other admins directly via bot commands.
 * **Full-Featured Admin Panel:** Admins can view bot stats, ban/unban users, and broadcast messages to all users.
+* **Force Subscription (Force-Join):**
+    * Users must join one or more specified channels before using the bot.
+    * Each channel is presented with a direct "Join Channel" button.
+    * Users can verify their subscription with a single tap.
+    * Admins and the owner are never restricted.
+* **Modern UI:** Clean, intuitive menus and inline buttons for all major actions.
+
+## 🛡️ Force Subscription System
+
+**New!**  
+The bot now supports a professional force-join system:
+
+- Users see a list of required channels and a "Join Channel" button for each.
+- After joining, they press "✅ Verify Subscription" to unlock the bot.
+- Admins can add, remove, and list force-sub channels with simple commands.
+- Admins/owner are always exempt.
 
 ## 🤖 Bot Commands
 
@@ -33,11 +49,17 @@ This project has been significantly upgraded from its original version to be a s
 ### For Admins Only
 * `/panel` - Shows the admin panel with bot statistics and user management options.
 * `/createcode` - Starts the process of creating a new redeem code.
+* `/createpool` - Create a pool of redeemable codes (e.g., for giveaways).
 * `/listadmins` - Shows a list of all current bot admins.
+* `/addforcesub <channel_id>` - Add a channel to the force subscription list.
+* `/removeforcesub <channel_id>` - Remove a channel from the force subscription list.
+* `/listforcesub` - List all force subscription channels.
 
 ### For the Bot Owner Only
 * `/addadmin <user_id>` - Promotes a user to an admin.
 * `/removeadmin <user_id>` - Removes an admin's privileges.
+* `/set_delete_timer` - Set the auto-delete timer for sent files/messages.
+* `/check_delete_timer` - Check the current auto-delete timer setting.
 
 ---
 
@@ -88,17 +110,17 @@ You can run this bot on a cloud platform (like Heroku, Render, Railway) or on yo
 ### Method 2: Local Development Setup
 
 1.  **Clone the Repository:**
-    ```sh
+    ```
     git clone <your-fork-url>
     cd <repository-name>
     ```
 2.  **Create a Virtual Environment:**
-    ```sh
+    ```
     python -m venv venv
     source venv/bin/activate  # On Windows, use `venv\Scripts\activate`
     ```
 3.  **Install Dependencies:**
-    ```sh
+    ```
     pip install -r requirements.txt
     ```
 4.  **Set Environment Variables:**
@@ -111,7 +133,7 @@ You can run this bot on a cloud platform (like Heroku, Render, Railway) or on yo
     STORAGE_GROUP_ID="your_channel_or_group_id"
     ```
 5.  **Run the Bot:**
-    ```sh
+    ```
     python up.V1.py
     ```
 
