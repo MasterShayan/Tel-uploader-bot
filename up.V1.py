@@ -140,19 +140,102 @@ def get_state(user_id): return user_states.get(user_id, {}).get('state')
 def get_state_data(user_id): return user_states.get(user_id, {}).get('data')
 def delete_state(user_id): user_states.pop(user_id, None)
 
-# --- Force Subscription (Robust, Multi-Channel) ---
+# --- Force Subscription (Private/Public, Forwarded Message, Verify Button) ---
+@bot.message_handler(commands=['addforcesub'])
+def add_forcesub_handler(message):
+    if not is_admin(message.from_user.id):
+        send_message(message.chat.id, "You are not authorized to use this command.")
+        return
+    send_message(message.chat.id, "Please forward a message from the channel you want to add for force subscription.")
+    set_state(message.from_user.id, "awaiting_forwardsub")
+
+@bot.message_handler(func=lambda message: get_state(message.from_user.id) == "awaiting_forwardsub" and message.forward_from_chat is not None)
+def handle_forwarded_channel_message(message):
+    user_id = message.from_user.id
+    channel = message.forward_from_chat
+    if channel.type not in ['channel', 'supergroup']:
+        send_message(user_id, "The forwarded message is not from a channel or supergroup. Please try again.")
+        return
+    config = admin_collection.find_one({'_id': 'bot_config'}) or {}
+    channels = config.get('force_sub_channel', [])
+    if isinstance(channels, str):
+        channels = [channels]
+    # Store both id and username (username may be None for private channels)
+    channel_info = {'id': channel.id, 'username': channel.username, 'title': channel.title}
+    # Avoid duplicates
+    if channel_info not in channels:
+        channels.append(channel_info)
+        admin_collection.update_one({'_id': 'bot_config'}, {'$set': {'force_sub_channel': channels}}, upsert=True)
+        send_message(user_id, f"Channel {channel.title} added to force subscription list.")
+    else:
+        send_message(user_id, f"Channel {channel.title} is already in the force subscription list.")
+    delete_state(user_id)
+
+@bot.message_handler(commands=['removeforcesub'])
+def remove_forcesub_handler(message):
+    if not is_admin(message.from_user.id):
+        send_message(message.chat.id, "You are not authorized to use this command."); return
+    args = message.text.split()
+    if len(args) < 2:
+        send_message(message.chat.id, "Usage: /removeforcesub @channelusername or channel_id"); return
+    channel_identifier = args[1]
+    config = admin_collection.find_one({'_id': 'bot_config'}) or {}
+    channels = config.get("force_sub_channel", [])
+    if isinstance(channels, str):
+        channels = [channels]
+    found = False
+    for channel in channels:
+        if (isinstance(channel, dict) and (str(channel.get('id')) == channel_identifier or (channel.get('username') and f"@{channel.get('username')}" == channel_identifier))) or channel == channel_identifier:
+            channels.remove(channel)
+            found = True
+            break
+    if found:
+        admin_collection.update_one({'_id': 'bot_config'}, {'$set': {'force_sub_channel': channels}}, upsert=True)
+        send_message(message.chat.id, f"Channel {channel_identifier} removed from force subscription list.")
+    else:
+        send_message(message.chat.id, f"Channel {channel_identifier} is not in the force subscription list.")
+
+@bot.message_handler(commands=['listforcesub'])
+def list_forcesub_handler(message):
+    if not is_admin(message.from_user.id):
+        send_message(message.chat.id, "You are not authorized to use this command."); return
+    config = admin_collection.find_one({'_id': 'bot_config'}) or {}
+    channels = config.get("force_sub_channel", [])
+    if isinstance(channels, str):
+        channels = [channels]
+    if channels:
+        msg = "Current force subscription channels:\n"
+        for channel in channels:
+            if isinstance(channel, dict):
+                if channel.get('username'):
+                    msg += f"@{channel['username']} (ID: {channel['id']}, Title: {channel.get('title','')})\n"
+                else:
+                    msg += f"ID: {channel['id']} (Title: {channel.get('title','')})\n"
+            else:
+                msg += f"{channel}\n"
+        send_message(message.chat.id, msg)
+    else:
+        send_message(message.chat.id, "No force subscription channels set.")
+
 def force_sub_check(message):
     user_id = message.from_user.id
     config = admin_collection.find_one({'_id': 'bot_config'}) or {}
-    channels = config.get("force_sub_channel")
+    channels = config.get("force_sub_channel", [])
     if not channels:
         return True
     if isinstance(channels, str):
         channels = [channels]
     unjoined_channels = []
     for channel in channels:
+        channel_id = channel['id'] if isinstance(channel, dict) else None
+        channel_username = channel.get('username') if isinstance(channel, dict) else channel
         try:
-            member = bot.get_chat_member(channel, user_id)
+            if channel_username:
+                member = bot.get_chat_member(f"@{channel_username}", user_id)
+            elif channel_id:
+                member = bot.get_chat_member(channel_id, user_id)
+            else:
+                continue
             if member.status not in ['member', 'administrator', 'creator']:
                 unjoined_channels.append(channel)
         except Exception as e:
@@ -163,17 +246,65 @@ def force_sub_check(message):
     lang_data = get_user_lang(user_id)
     markup = types.InlineKeyboardMarkup()
     for channel in unjoined_channels:
-        channel_handle = channel.replace('@', '')
-        markup.add(types.InlineKeyboardButton(
-            lang_data.get("join_channel_button", f"Join {channel}"),
-            url=f"https://t.me/{channel_handle}"
-        ))
+        channel_username = channel.get('username') if isinstance(channel, dict) else channel
+        channel_id = channel['id'] if isinstance(channel, dict) else None
+        channel_title = channel.get('title') if isinstance(channel, dict) else channel
+        if channel_username:
+            markup.add(types.InlineKeyboardButton(
+                lang_data.get("join_channel_button", f"Join @{channel_username}"),
+                url=f"https://t.me/{channel_username}"
+            ))
+        elif channel_id:
+            markup.add(types.InlineKeyboardButton(
+                lang_data.get("join_channel_button", f"Join {channel_title}"),
+                url=f"https://t.me/c/{str(channel_id)[4:]}"
+            ))
+    markup.add(types.InlineKeyboardButton("✅ Verify", callback_data="verify_force_sub"))
     send_message(
         user_id,
         lang_data.get("force_sub_message", "📢 You must join these channel(s) to use the bot:"),
         reply_markup=markup
     )
     return False
+
+@bot.callback_query_handler(func=lambda call: call.data == "verify_force_sub")
+def verify_force_sub_callback(call):
+    user_id = call.from_user.id
+    class DummyMessage:
+        def __init__(self, user_id):
+            self.from_user = type('User', (), {'id': user_id})
+    dummy_message = DummyMessage(user_id)
+    if force_sub_check(dummy_message):
+        lang_data = get_user_lang(user_id)
+        bot.answer_callback_query(call.id, "Verification successful!")
+        send_message(user_id, lang_data["start_message"], reply_markup=main_keyboard(get_user_lang_code(user_id)))
+    else:
+        lang_data = get_user_lang(user_id)
+        bot.answer_callback_query(call.id, "You have not joined all required channels.")
+        # Resend force sub prompt
+        config = admin_collection.find_one({'_id': 'bot_config'}) or {}
+        channels = config.get("force_sub_channel", [])
+        if not channels:
+            return
+        if isinstance(channels, str):
+            channels = [channels]
+        markup = types.InlineKeyboardMarkup()
+        for channel in channels:
+            channel_username = channel.get('username') if isinstance(channel, dict) else channel
+            channel_id = channel['id'] if isinstance(channel, dict) else None
+            channel_title = channel.get('title') if isinstance(channel, dict) else channel
+            if channel_username:
+                markup.add(types.InlineKeyboardButton(
+                    lang_data.get("join_channel_button", f"Join @{channel_username}"),
+                    url=f"https://t.me/{channel_username}"
+                ))
+            elif channel_id:
+                markup.add(types.InlineKeyboardButton(
+                    lang_data.get("join_channel_button", f"Join {channel_title}"),
+                    url=f"https://t.me/c/{str(channel_id)[4:]}"
+                ))
+        markup.add(types.InlineKeyboardButton("✅ Verify", callback_data="verify_force_sub"))
+        send_message(user_id, lang_data.get("force_sub_message", "Please join our channel(s) to use the bot."), reply_markup=markup)
 
 # --- Keyboards ---
 def main_keyboard(lang_code):
@@ -197,58 +328,6 @@ def back_keyboard(lang_code):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add(types.KeyboardButton(lang_data["back_button"]))
     return markup
-
-# --- Force Subscription Channel Management Commands ---
-@bot.message_handler(commands=['addforcesub'])
-def add_forcesub_handler(message):
-    if not is_admin(message.from_user.id):
-        send_message(message.chat.id, "You are not authorized to use this command."); return
-    args = message.text.split()
-    if len(args) < 2:
-        send_message(message.chat.id, "Usage: /addforcesub @channelusername"); return
-    channel = args[1]
-    config = admin_collection.find_one({'_id': 'bot_config'}) or {}
-    channels = config.get("force_sub_channel", [])
-    if isinstance(channels, str):
-        channels = [channels]
-    if channel not in channels:
-        channels.append(channel)
-        admin_collection.update_one({'_id': 'bot_config'}, {'$set': {'force_sub_channel': channels}}, upsert=True)
-        send_message(message.chat.id, f"Channel {channel} added to force subscription list.")
-    else:
-        send_message(message.chat.id, f"Channel {channel} is already in the list.")
-
-@bot.message_handler(commands=['removeforcesub'])
-def remove_forcesub_handler(message):
-    if not is_admin(message.from_user.id):
-        send_message(message.chat.id, "You are not authorized to use this command."); return
-    args = message.text.split()
-    if len(args) < 2:
-        send_message(message.chat.id, "Usage: /removeforcesub @channelusername"); return
-    channel = args[1]
-    config = admin_collection.find_one({'_id': 'bot_config'}) or {}
-    channels = config.get("force_sub_channel", [])
-    if isinstance(channels, str):
-        channels = [channels]
-    if channel in channels:
-        channels.remove(channel)
-        admin_collection.update_one({'_id': 'bot_config'}, {'$set': {'force_sub_channel': channels}}, upsert=True)
-        send_message(message.chat.id, f"Channel {channel} removed from force subscription list.")
-    else:
-        send_message(message.chat.id, f"Channel {channel} is not in the list.")
-
-@bot.message_handler(commands=['listforcesub'])
-def list_forcesub_handler(message):
-    if not is_admin(message.from_user.id):
-        send_message(message.chat.id, "You are not authorized to use this command."); return
-    config = admin_collection.find_one({'_id': 'bot_config'}) or {}
-    channels = config.get("force_sub_channel", [])
-    if isinstance(channels, str):
-        channels = [channels]
-    if channels:
-        send_message(message.chat.id, "Current force subscription channels:\n" + "\n".join(channels))
-    else:
-        send_message(message.chat.id, "No force subscription channels set.")
 
 # --- Command Handlers ---
 @bot.message_handler(commands=['start'])
