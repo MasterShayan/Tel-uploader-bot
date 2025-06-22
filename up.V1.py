@@ -1,308 +1,409 @@
 import telebot
-import os
-import pymongo
-import json
 from telebot import types
-import hashlib
+from pymongo import MongoClient
+import os
+import json
 import random
 import string
-from datetime import datetime, UTC
-import threading
+import datetime
 import time
 
-BOT_TOKEN = os.environ.get('BOT_TOKEN')
-ADMIN_IDS_STR = os.environ.get('ADMIN_IDS', '0')
-try:
-    INITIAL_ADMIN_IDS = [int(i.strip()) for i in ADMIN_IDS_STR.split(',') if i.strip()]
-    OWNER_ID = INITIAL_ADMIN_IDS[0] if INITIAL_ADMIN_IDS else 0
-except (ValueError, IndexError):
-    print("ERROR: Invalid ADMIN_IDS format in environment variables.")
-    INITIAL_ADMIN_IDS = []
-    OWNER_ID = 0
+# Load environment variables
+BOT_TOKEN = os.getenv('BOT_TOKEN')
+MONGO_URI = os.getenv('MONGO_URI')
+OWNER_ID = int(os.getenv('OWNER_ID'))
+CHANNEL_ID = os.getenv('CHANNEL_ID')
 
-STORAGE_GROUP_ID = int(os.environ.get('STORAGE_GROUP_ID'))
-MONGODB_URI = os.environ.get('MONGODB_URI')
-DEFAULT_LANGUAGE = "en"
+bot = telebot.TeleBot(BOT_TOKEN)
+client = MongoClient(MONGO_URI)
+db = client['filebot']
 
-client = pymongo.MongoClient(MONGODB_URI)
-db = client['uploader_bot_db']
-users_collection = db['users']
-admin_collection = db['admin_config']
-redeem_codes_collection = db['redeem_codes']
-files_collection = db['files']
-counters_collection = db['counters']
-force_sub_collection = db['force_sub_channels']
+user_states = {}  # For tracking user states, including support replies
 
-bot = telebot.TeleBot(BOT_TOKEN, threaded=True, num_threads=10)
+# Load languages
+def load_language(lang_code):
+    with open(f'languages/{lang_code}.json', 'r', encoding='utf-8') as f:
+        return json.load(f)
 
-def get_next_sequence_value(sequence_name):
-    if counters_collection.find_one({'_id': sequence_name}) is None:
-        counters_collection.insert_one({'_id': sequence_name, 'sequence_value': 0})
-    sequence_document = counters_collection.find_one_and_update(
-        {'_id': sequence_name},
-        {'$inc': {'sequence_value': 1}},
-        return_document=pymongo.ReturnDocument.AFTER
-    )
-    return sequence_document['sequence_value']
+def get_user_language(user_id):
+    user = db.users.find_one({"user_id": user_id})
+    return user.get("language", "en") if user else "en"
 
-def get_admin_list():
-    config = admin_collection.find_one({'_id': 'bot_config'})
-    if config and 'admin_ids' in config:
-        return config['admin_ids']
-    else:
-        if INITIAL_ADMIN_IDS:
-            admin_collection.update_one(
-                {'_id': 'bot_config'},
-                {'$set': {'admin_ids': INITIAL_ADMIN_IDS}},
-                upsert=True
-            )
-            return INITIAL_ADMIN_IDS
-        return []
+def t(user_id, key):
+    lang = get_user_language(user_id)
+    lang_data = load_language(lang)
+    return lang_data.get(key, key)
+
+# Helper functions
+def generate_code(length=8):
+    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
 
 def is_admin(user_id):
-    return user_id in get_admin_list()
+    admin = db.admins.find_one({"user_id": user_id})
+    return admin is not None or user_id == OWNER_ID
 
-LANGUAGES = {"en": "English"}
-def load_language(lang_code):
+def is_banned(user_id):
+    return db.banned.find_one({"user_id": user_id}) is not None
+
+def force_subscribed(user_id):
     try:
-        with open(os.path.join("languages", f"{lang_code}.json"), "r", encoding="utf-8") as f:
-            return json.load(f)
-    except FileNotFoundError:
-        with open(os.path.join("languages", f"{DEFAULT_LANGUAGE}.json"), "r", encoding="utf-8") as f:
-            return json.load(f)
-def get_user_lang_code(user_id):
-    user_doc = users_collection.find_one({'_id': user_id}, {'language': 1})
-    return user_doc.get('language', DEFAULT_LANGUAGE) if user_doc else DEFAULT_LANGUAGE
-def get_user_lang(user_id):
-    return load_language(get_user_lang_code(user_id))
+        member = bot.get_chat_member(CHANNEL_ID, user_id)
+        return member.status in ['member', 'administrator', 'creator']
+    except Exception:
+        return False
 
-def get_force_sub_channels():
-    return list(force_sub_collection.find({}))
+def get_file_info(file_id):
+    file = db.files.find_one({"file_id": file_id})
+    return file
 
-def force_sub_check(message):
-    user_id = message.from_user.id
-    if is_admin(user_id) or user_id == OWNER_ID:
-        return True
-    if message.text and message.text.startswith(('/addforcesub', '/removeforcesub', '/listforcesub')):
-        return True
-    channels = get_force_sub_channels()
-    for ch in channels:
-        try:
-            member = bot.get_chat_member(ch['channel_id'], user_id)
-            if member.status in ['left', 'kicked']:
-                send_force_sub_message(message.chat.id, user_id)
-                return False
-        except Exception:
-            send_force_sub_message(message.chat.id, user_id)
-            return False
+def save_file(file_id, file_unique_id, user_id, file_type, file_name, file_size, timer):
+    db.files.insert_one({
+        "file_id": file_id,
+        "file_unique_id": file_unique_id,
+        "user_id": user_id,
+        "file_type": file_type,
+        "file_name": file_name,
+        "file_size": file_size,
+        "timer": timer,
+        "upload_time": datetime.datetime.now()
+    })
+
+def get_user_profile(user_id):
+    user = db.users.find_one({"user_id": user_id})
+    if not user:
+        return None
+    return {
+        "user_id": user_id,
+        "language": user.get("language", "en"),
+        "files_uploaded": db.files.count_documents({"user_id": user_id}),
+        "banned": is_banned(user_id)
+    }
+
+def set_user_language(user_id, lang_code):
+    db.users.update_one({"user_id": user_id}, {"$set": {"language": lang_code}}, upsert=True)
+
+def add_admin(user_id):
+    db.admins.update_one({"user_id": user_id}, {"$set": {"user_id": user_id}}, upsert=True)
+
+def remove_admin(user_id):
+    db.admins.delete_one({"user_id": user_id})
+
+def ban_user(user_id):
+    db.banned.update_one({"user_id": user_id}, {"$set": {"user_id": user_id}}, upsert=True)
+
+def unban_user(user_id):
+    db.banned.delete_one({"user_id": user_id})
+
+def add_code(code, user_id=None, pool=False):
+    db.codes.insert_one({
+        "code": code,
+        "user_id": user_id,
+        "used": False,
+        "pool": pool
+    })
+
+def redeem_code(user_id, code):
+    code_doc = db.codes.find_one({"code": code, "used": False})
+    if not code_doc:
+        return False
+    db.codes.update_one({"code": code}, {"$set": {"used": True, "user_id": user_id}})
     return True
 
-def send_force_sub_message(chat_id, user_id):
-    channels = get_force_sub_channels()
-    if not channels:
-        return True
+def get_stats():
+    return {
+        "users": db.users.count_documents({}),
+        "files": db.files.count_documents({}),
+        "admins": db.admins.count_documents({}),
+        "banned": db.banned.count_documents({})
+    }
 
-    lang_data = get_user_lang(user_id)
-    text_lines = ["🚫 You must join these channels to use this bot:"]
+# Start command
+@bot.message_handler(commands=['start'])
+def start(message):
+    user_id = message.chat.id
+    if is_banned(user_id):
+        bot.send_message(user_id, "You are banned from using this bot.")
+        return
+    db.users.update_one({"user_id": user_id}, {"$set": {"user_id": user_id}}, upsert=True)
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.row("📤 Upload File", "📁 My Files")
+    markup.row("🎁 Redeem Code", "👤 Profile")
+    markup.row("🛠 Admin Panel", "Support 🗣")
+    markup.row("🌐 Language")
+    bot.send_message(user_id, "Welcome to the File Bot!", reply_markup=markup)
+
+# Language selection
+@bot.message_handler(func=lambda message: message.text == "🌐 Language")
+def language(message):
     markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("English", callback_data="lang_en"))
+    markup.add(types.InlineKeyboardButton("Français", callback_data="lang_fr"))
+    markup.add(types.InlineKeyboardButton("Español", callback_data="lang_es"))
+    bot.send_message(message.chat.id, "Select your language:", reply_markup=markup)
 
-    for ch in channels:
-        text_lines.append(f"- {ch['title']}")
-        join_btn = types.InlineKeyboardButton(
-            text=f"🔗 Join {ch['title']}",
-            url=ch.get('invite_link', 'https://t.me/')
-        )
-        markup.add(join_btn)
+@bot.callback_query_handler(func=lambda call: call.data.startswith("lang_"))
+def set_lang(call):
+    lang_code = call.data.split("_")[1]
+    set_user_language(call.from_user.id, lang_code)
+    bot.answer_callback_query(call.id, "Language updated.")
+    bot.send_message(call.from_user.id, "Language set successfully.")
 
-    verify_btn = types.InlineKeyboardButton(
-        text=lang_data["force_sub_verify_button"],
-        callback_data=f"force_sub_verify:{user_id}"
-    )
-    markup.add(verify_btn)
+# Upload file
+@bot.message_handler(func=lambda message: message.text == "📤 Upload File")
+def upload_file(message):
+    bot.send_message(message.chat.id, "Send me the file you want to upload:")
 
-    text_lines.append("\nJoin them and press ✅ Verify Subscription.")
-    text = "\n".join(text_lines)
-    send_message(chat_id, text, reply_markup=markup)
-    return False
+@bot.message_handler(content_types=['document', 'photo', 'video', 'audio'])
+def handle_file(message):
+    user_id = message.chat.id
+    if is_banned(user_id):
+        bot.send_message(user_id, "You are banned from using this bot.")
+        return
+    if not force_subscribed(user_id):
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("Join Channel", url=f"https://t.me/{CHANNEL_ID.replace('@','')}"))
+        bot.send_message(user_id, "Please join our channel to use the bot.", reply_markup=markup)
+        return
 
-def send_message(chat_id, text, reply_markup=None, parse_mode="HTML"):
-    try:
-        return bot.send_message(chat_id, text, parse_mode=parse_mode, reply_markup=reply_markup, disable_web_page_preview=True)
-    except Exception as e:
-        print(f"Error sending message to {chat_id}: {e}")
-        return None
+    file_id = None
+    file_unique_id = None
+    file_type = None
+    file_name = None
+    file_size = None
 
-def schedule_message_deletion(chat_id, message_id, delay_seconds):
-    def delete_worker():
-        time.sleep(delay_seconds)
-        try:
-            bot.delete_message(chat_id, message_id)
-        except Exception as e:
-            print(f"Could not delete message {message_id} in chat {chat_id}: {e}")
-    threading.Thread(target=delete_worker).start()
+    if message.document:
+        file_id = message.document.file_id
+        file_unique_id = message.document.file_unique_id
+        file_type = "document"
+        file_name = message.document.file_name
+        file_size = message.document.file_size
+    elif message.photo:
+        file_id = message.photo[-1].file_id
+        file_unique_id = message.photo[-1].file_unique_id
+        file_type = "photo"
+        file_name = "Photo"
+        file_size = message.photo[-1].file_size
+    elif message.video:
+        file_id = message.video.file_id
+        file_unique_id = message.video.file_unique_id
+        file_type = "video"
+        file_name = message.video.file_name
+        file_size = message.video.file_size
+    elif message.audio:
+        file_id = message.audio.file_id
+        file_unique_id = message.audio.file_unique_id
+        file_type = "audio"
+        file_name = message.audio.file_name
+        file_size = message.audio.file_size
 
-def send_file_by_id(chat_id, file_type, file_id, caption=None):
-    sent_message = None
-    try:
-        if file_type == "photo": sent_message = bot.send_photo(chat_id, file_id, caption=caption)
-        elif file_type == "video": sent_message = bot.send_video(chat_id, file_id, caption=caption)
-        elif file_type == "document": sent_message = bot.send_document(chat_id, file_id, caption=caption)
-        elif file_type == "audio" or file_type == "music": sent_message = bot.send_audio(chat_id, file_id, caption=caption)
-        if sent_message:
-            config = admin_collection.find_one({'_id': 'bot_config'}) or {}
-            delay = config.get('auto_delete_seconds', 0)
-            if delay > 0:
-                schedule_message_deletion(chat_id, sent_message.message_id, delay)
-    except Exception as e:
-        print(f"Error sending file by ID to {chat_id}: {e}")
-    return sent_message
+    timer = 0  # Default: no auto-delete
+    save_file(file_id, file_unique_id, user_id, file_type, file_name, file_size, timer)
+    link = f"https://t.me/{bot.get_me().username}?start={file_unique_id}"
+    bot.send_message(user_id, f"File uploaded! Download link:\n{link}")
 
-def send_confirmation_disclaimer(chat_id):
-    lang_data = get_user_lang(chat_id)
-    config = admin_collection.find_one({'_id': 'bot_config'}) or {}
-    delay = config.get('auto_delete_seconds', 0)
-    confirmation_message = None
-    if delay > 0:
-        time_str = f"{delay} seconds"
-        if delay >= 3600:
-            hours = delay // 3600; time_str = f"{hours} hour" + ("s" if hours > 1 else "")
-        elif delay >= 60:
-            minutes = delay // 60; time_str = f"{minutes} minute" + ("s" if minutes > 1 else "")
-        confirmation_message = send_message(chat_id, lang_data["file_delivery_success_timed"].format(time=time_str))
+# My Files
+@bot.message_handler(func=lambda message: message.text == "📁 My Files")
+def my_files(message):
+    user_id = message.chat.id
+    files = db.files.find({"user_id": user_id})
+    if files.count() == 0:
+        bot.send_message(user_id, "You have no files uploaded.")
+        return
+    for file in files:
+        bot.send_message(user_id, f"{file['file_name']} ({file['file_type']})")
+
+# Redeem code
+@bot.message_handler(func=lambda message: message.text == "🎁 Redeem Code")
+def redeem_code_start(message):
+    bot.send_message(message.chat.id, "Send the code you want to redeem:")
+    user_states[message.chat.id] = {"redeem": True}
+
+@bot.message_handler(func=lambda message: user_states.get(message.chat.id, {}).get("redeem"))
+def handle_redeem_code(message):
+    code = message.text.strip().upper()
+    user_id = message.chat.id
+    if redeem_code(user_id, code):
+        bot.send_message(user_id, "Code redeemed successfully!")
     else:
-        confirmation_message = send_message(chat_id, lang_data["file_delivery_success"])
-    if confirmation_message and delay > 0:
-        schedule_message_deletion(chat_id, confirmation_message.message_id, delay)
+        bot.send_message(user_id, "Invalid or already used code.")
+    user_states.pop(user_id, None)
 
-user_states = {}
-def set_state(user_id, state, data=None): user_states[user_id] = {'state': state, 'data': data}
-def get_state(user_id): return user_states.get(user_id, {}).get('state')
-def get_state_data(user_id): return user_states.get(user_id, {}).get('data')
-def delete_state(user_id): user_states.pop(user_id, None)
+# Profile
+@bot.message_handler(func=lambda message: message.text == "👤 Profile")
+def profile(message):
+    user_id = message.chat.id
+    profile = get_user_profile(user_id)
+    if not profile:
+        bot.send_message(user_id, "No profile found.")
+        return
+    bot.send_message(user_id, f"User ID: {profile['user_id']}\nLanguage: {profile['language']}\nFiles uploaded: {profile['files_uploaded']}\nBanned: {profile['banned']}")
 
-def main_keyboard(lang_code):
-    lang_data = load_language(lang_code)
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    btn1, btn2, btn3 = types.KeyboardButton(lang_data["upload_button"]), types.KeyboardButton(lang_data["delete_button"]), types.KeyboardButton(lang_data["get_file_button"])
-    btn4, btn5, btn6, btn7 = types.KeyboardButton(lang_data["redeem_button"]), types.KeyboardButton(lang_data["caption_button"]), types.KeyboardButton(lang_data["support_button"]), types.KeyboardButton(lang_data["profile_button"])
-    markup.add(btn1); markup.add(btn2, btn3); markup.add(btn4, btn5); markup.add(btn6, btn7)
-    return markup
-
-def admin_keyboard(lang_code):
-    lang_data = load_language(lang_code)
+# Admin Panel
+@bot.message_handler(func=lambda message: message.text == "🛠 Admin Panel")
+def admin_panel(message):
+    user_id = message.chat.id
+    if not is_admin(user_id):
+        bot.send_message(user_id, "You are not an admin.")
+        return
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add(types.KeyboardButton(lang_data["admin_stats_button"]), types.KeyboardButton(lang_data["admin_bot_status_button"]))
-    markup.add(types.KeyboardButton(lang_data["admin_ban_button"]), types.KeyboardButton(lang_data["admin_unban_button"]))
-    markup.add(types.KeyboardButton(lang_data["admin_broadcast_button"]), types.KeyboardButton(lang_data["admin_forward_broadcast_button"]))
-    return markup
+    markup.row("Add Admin", "Remove Admin")
+    markup.row("Ban User", "Unban User")
+    markup.row("Broadcast", "Stats")
+    markup.row("Back")
+    bot.send_message(user_id, "Admin Panel:", reply_markup=markup)
 
-def back_keyboard(lang_code):
-    lang_data = load_language(lang_code)
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add(types.KeyboardButton(lang_data["back_button"]))
-    return markup
-
-@bot.message_handler(commands=['addforcesub'])
-def add_force_sub_channel(message):
-    if not is_admin(message.from_user.id):
+@bot.message_handler(func=lambda message: message.text == "Add Admin")
+def add_admin_start(message):
+    user_id = message.chat.id
+    if not is_admin(user_id):
+        bot.send_message(user_id, "You are not an admin.")
         return
-    lang_data = get_user_lang(message.from_user.id)
-    send_message(message.chat.id, lang_data["force_sub_add_prompt"])
-    set_state(message.from_user.id, "add_force_sub")
+    bot.send_message(user_id, "Send the user ID to add as admin:")
+    user_states[user_id] = {"add_admin": True}
 
-@bot.message_handler(commands=['removeforcesub'])
-def remove_force_sub_channel(message):
-    if not is_admin(message.from_user.id):
-        return
-    lang_data = get_user_lang(message.from_user.id)
-    send_message(message.chat.id, lang_data["force_sub_remove_prompt"])
-    set_state(message.from_user.id, "remove_force_sub")
-
-@bot.message_handler(commands=['listforcesub'])
-def list_force_sub_channels(message):
-    if not is_admin(message.from_user.id):
-        return
-    channels = get_force_sub_channels()
-    lang_data = get_user_lang(message.from_user.id)
-    if not channels:
-        send_message(message.chat.id, "No force subscription channels set.")
-        return
-    response = [lang_data["force_sub_list_header"]]
-    for channel in channels:
-        response.append(
-            lang_data["force_sub_channel_entry"].format(
-                title=channel['title'],
-                id=channel['channel_id'],
-                invite_link=channel.get('invite_link', 'N/A')
-            )
-        )
-    send_message(message.chat.id, "\n".join(response), parse_mode="Markdown")
-
-@bot.message_handler(func=lambda message: get_state(message.from_user.id) == "add_force_sub")
-def add_force_sub_handler(message):
+@bot.message_handler(func=lambda message: user_states.get(message.chat.id, {}).get("add_admin"))
+def handle_add_admin(message):
     try:
-        channel_id = int(message.text)
-        chat = bot.get_chat(channel_id)
-        invite_link = None
+        new_admin_id = int(message.text.strip())
+        add_admin(new_admin_id)
+        bot.send_message(message.chat.id, "Admin added successfully.")
+    except Exception:
+        bot.send_message(message.chat.id, "Invalid user ID.")
+    user_states.pop(message.chat.id, None)
+
+@bot.message_handler(func=lambda message: message.text == "Remove Admin")
+def remove_admin_start(message):
+    user_id = message.chat.id
+    if not is_admin(user_id):
+        bot.send_message(user_id, "You are not an admin.")
+        return
+    bot.send_message(user_id, "Send the user ID to remove as admin:")
+    user_states[user_id] = {"remove_admin": True}
+
+@bot.message_handler(func=lambda message: user_states.get(message.chat.id, {}).get("remove_admin"))
+def handle_remove_admin(message):
+    try:
+        admin_id = int(message.text.strip())
+        remove_admin(admin_id)
+        bot.send_message(message.chat.id, "Admin removed successfully.")
+    except Exception:
+        bot.send_message(message.chat.id, "Invalid user ID.")
+    user_states.pop(message.chat.id, None)
+
+@bot.message_handler(func=lambda message: message.text == "Ban User")
+def ban_user_start(message):
+    user_id = message.chat.id
+    if not is_admin(user_id):
+        bot.send_message(user_id, "You are not an admin.")
+        return
+    bot.send_message(user_id, "Send the user ID to ban:")
+    user_states[user_id] = {"ban_user": True}
+
+@bot.message_handler(func=lambda message: user_states.get(message.chat.id, {}).get("ban_user"))
+def handle_ban_user(message):
+    try:
+        ban_id = int(message.text.strip())
+        ban_user(ban_id)
+        bot.send_message(message.chat.id, "User banned successfully.")
+    except Exception:
+        bot.send_message(message.chat.id, "Invalid user ID.")
+    user_states.pop(message.chat.id, None)
+
+@bot.message_handler(func=lambda message: message.text == "Unban User")
+def unban_user_start(message):
+    user_id = message.chat.id
+    if not is_admin(user_id):
+        bot.send_message(user_id, "You are not an admin.")
+        return
+    bot.send_message(user_id, "Send the user ID to unban:")
+    user_states[user_id] = {"unban_user": True}
+
+@bot.message_handler(func=lambda message: user_states.get(message.chat.id, {}).get("unban_user"))
+def handle_unban_user(message):
+    try:
+        unban_id = int(message.text.strip())
+        unban_user(unban_id)
+        bot.send_message(message.chat.id, "User unbanned successfully.")
+    except Exception:
+        bot.send_message(message.chat.id, "Invalid user ID.")
+    user_states.pop(message.chat.id, None)
+
+@bot.message_handler(func=lambda message: message.text == "Broadcast")
+def broadcast_start(message):
+    user_id = message.chat.id
+    if not is_admin(user_id):
+        bot.send_message(user_id, "You are not an admin.")
+        return
+    bot.send_message(user_id, "Send the broadcast message:")
+    user_states[user_id] = {"broadcast": True}
+
+@bot.message_handler(func=lambda message: user_states.get(message.chat.id, {}).get("broadcast"))
+def handle_broadcast(message):
+    broadcast_text = message.text
+    users = db.users.find({})
+    for user in users:
         try:
-            invite_link = chat.invite_link
+            bot.send_message(user['user_id'], broadcast_text)
         except Exception:
             pass
-        force_sub_collection.update_one(
-            {'channel_id': channel_id},
-            {'$set': {
-                'title': chat.title,
-                'invite_link': invite_link
-            }},
-            upsert=True
-        )
-        send_message(message.chat.id, get_user_lang(message.from_user.id)["force_sub_admin_add_success"])
-        delete_state(message.from_user.id)
-    except (ValueError, telebot.apihelper.ApiTelegramException):
-        send_message(message.chat.id, "Invalid channel ID or bot not admin in channel.")
+    bot.send_message(message.chat.id, "Broadcast sent.")
+    user_states.pop(message.chat.id, None)
 
-@bot.message_handler(func=lambda message: get_state(message.from_user.id) == "remove_force_sub")
-def remove_force_sub_handler(message):
-    try:
-        channel_id = int(message.text)
-        result = force_sub_collection.delete_one({'channel_id': channel_id})
-        if result.deleted_count > 0:
-            send_message(message.chat.id, get_user_lang(message.from_user.id)["force_sub_admin_remove_success"])
-        else:
-            send_message(message.chat.id, "Channel not found in force subscription list.")
-        delete_state(message.from_user.id)
-    except ValueError:
-        send_message(message.chat.id, "Invalid channel ID format.")
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('force_sub_verify:'))
-def verify_force_sub_callback(call):
-    user_id = int(call.data.split(':')[1])
-    channels = get_force_sub_channels()
-    lang_data = get_user_lang(user_id)
-    if not channels:
-        bot.answer_callback_query(call.id, "No subscription required!")
+@bot.message_handler(func=lambda message: message.text == "Stats")
+def stats(message):
+    user_id = message.chat.id
+    if not is_admin(user_id):
+        bot.send_message(user_id, "You are not an admin.")
         return
-    
-    all_joined = True
-    for ch in channels:
-        try:
-            member = bot.get_chat_member(ch['channel_id'], user_id)
-            if member.status in ['left', 'kicked']:
-                all_joined = False
-                break
-        except Exception:
-            all_joined = False
-            break
-    
-    if all_joined:
-        bot.answer_callback_query(call.id, lang_data["force_sub_success"])
-        bot.edit_message_text(
-            lang_data["force_sub_success"],
-            call.message.chat.id,
-            call.message.message_id
-        )
-    else:
-        bot.answer_callback_query(call.id, lang_data["force_sub_failure"])
+    s = get_stats()
+    bot.send_message(user_id, f"Users: {s['users']}\nFiles: {s['files']}\nAdmins: {s['admins']}\nBanned: {s['banned']}")
+
+@bot.message_handler(func=lambda message: message.text == "Back")
+def back(message):
+    start(message)
+
+# --- SUPPORT SYSTEM (FIXED) ---
+@bot.message_handler(func=lambda message: message.text == "Support 🗣")
+def support_start(message):
+    bot.send_message(message.chat.id, "Please send your support message:")
+    user_states[message.chat.id] = {"support": True}
+
+@bot.message_handler(func=lambda message: user_states.get(message.chat.id, {}).get("support"))
+def handle_support_message(message):
+    support_text = message.text
+    user_id = message.chat.id
+
+    # Send support message to owner with "Answer User" button
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("Answer User", callback_data=f"answer_user_{user_id}"))
+    bot.send_message(OWNER_ID, f"Support message from user {user_id}:\n\n{support_text}", reply_markup=markup)
+
+    bot.send_message(user_id, "Your message has been sent to the owner. They will reply soon.")
+    # Clear support state for user
+    user_states.pop(user_id, None)
+
+# --- SUPPORT FIX: Owner can answer user ---
+@bot.callback_query_handler(func=lambda call: call.data.startswith("answer_user_"))
+def answer_user_callback(call):
+    user_id = int(call.data.split("_")[-1])
+    bot.send_message(call.from_user.id, f"Please type your reply to user {user_id}:")
+    user_states[call.from_user.id] = {"reply_to": user_id}
+    bot.answer_callback_query(call.id, "Please type your reply.")
+
+@bot.message_handler(func=lambda message: user_states.get(message.from_user.id, {}).get("reply_to"))
+def send_reply_to_user(message):
+    user_id = user_states[message.from_user.id]["reply_to"]
+    try:
+        bot.send_message(user_id, f"Support reply from owner:\n\n{message.text}")
+        bot.send_message(message.from_user.id, "Your reply has been sent to the user.")
+    except Exception as e:
+        bot.send_message(message.from_user.id, f"Failed to send reply: {e}")
+    user_states.pop(message.from_user.id, None)
+
+# --- END SUPPORT SYSTEM ---
+
+# Main polling loop
+bot.infinity_polling()
 
 @bot.message_handler(commands=['start'])
 def start_command_handler(message):
