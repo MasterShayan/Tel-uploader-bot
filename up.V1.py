@@ -160,9 +160,7 @@ def handle_forwarded_channel_message(message):
     channels = config.get('force_sub_channel', [])
     if isinstance(channels, str):
         channels = [channels]
-    # Store both id and username (username may be None for private channels)
     channel_info = {'id': channel.id, 'username': channel.username, 'title': channel.title}
-    # Avoid duplicates
     if channel_info not in channels:
         channels.append(channel_info)
         admin_collection.update_one({'_id': 'bot_config'}, {'$set': {'force_sub_channel': channels}}, upsert=True)
@@ -217,6 +215,19 @@ def list_forcesub_handler(message):
     else:
         send_message(message.chat.id, "No force subscription channels set.")
 
+def get_channel_invite_link(channel):
+    # channel: dict with 'id', 'username', 'title'
+    if channel.get('username'):
+        return f"https://t.me/{channel['username']}"
+    else:
+        try:
+            # This requires the bot to be admin in the channel with invite rights
+            invite = bot.create_chat_invite_link(channel['id'])
+            return invite.invite_link
+        except Exception as e:
+            print(f"Failed to generate invite link for channel {channel['id']}: {e}")
+            return None
+
 def force_sub_check(message):
     user_id = message.from_user.id
     config = admin_collection.find_one({'_id': 'bot_config'}) or {}
@@ -246,18 +257,17 @@ def force_sub_check(message):
     lang_data = get_user_lang(user_id)
     markup = types.InlineKeyboardMarkup()
     for channel in unjoined_channels:
-        channel_username = channel.get('username') if isinstance(channel, dict) else channel
-        channel_id = channel['id'] if isinstance(channel, dict) else None
+        invite_link = get_channel_invite_link(channel) if isinstance(channel, dict) else None
         channel_title = channel.get('title') if isinstance(channel, dict) else channel
-        if channel_username:
-            markup.add(types.InlineKeyboardButton(
-                lang_data.get("join_channel_button", f"Join @{channel_username}"),
-                url=f"https://t.me/{channel_username}"
-            ))
-        elif channel_id:
+        if invite_link:
             markup.add(types.InlineKeyboardButton(
                 lang_data.get("join_channel_button", f"Join {channel_title}"),
-                url=f"https://t.me/c/{str(channel_id)[4:]}"
+                url=invite_link
+            ))
+        else:
+            markup.add(types.InlineKeyboardButton(
+                f"Ask admin for invite to {channel_title}",
+                url="https://t.me/YourSupportBotOrAdmin"
             ))
     markup.add(types.InlineKeyboardButton("✅ Verify", callback_data="verify_force_sub"))
     send_message(
@@ -290,18 +300,17 @@ def verify_force_sub_callback(call):
             channels = [channels]
         markup = types.InlineKeyboardMarkup()
         for channel in channels:
-            channel_username = channel.get('username') if isinstance(channel, dict) else channel
-            channel_id = channel['id'] if isinstance(channel, dict) else None
+            invite_link = get_channel_invite_link(channel) if isinstance(channel, dict) else None
             channel_title = channel.get('title') if isinstance(channel, dict) else channel
-            if channel_username:
-                markup.add(types.InlineKeyboardButton(
-                    lang_data.get("join_channel_button", f"Join @{channel_username}"),
-                    url=f"https://t.me/{channel_username}"
-                ))
-            elif channel_id:
+            if invite_link:
                 markup.add(types.InlineKeyboardButton(
                     lang_data.get("join_channel_button", f"Join {channel_title}"),
-                    url=f"https://t.me/c/{str(channel_id)[4:]}"
+                    url=invite_link
+                ))
+            else:
+                markup.add(types.InlineKeyboardButton(
+                    f"Ask admin for invite to {channel_title}",
+                    url="https://t.me/YourSupportBotOrAdmin"
                 ))
         markup.add(types.InlineKeyboardButton("✅ Verify", callback_data="verify_force_sub"))
         send_message(user_id, lang_data.get("force_sub_message", "Please join our channel(s) to use the bot."), reply_markup=markup)
@@ -476,7 +485,7 @@ def check_delete_timer_command_handler(message):
     seconds = config.get('auto_delete_seconds', 0)
     send_message(message.chat.id, lang_data["check_delete_timer_status"].format(seconds=seconds))
 
-# --- Handlers for conversational states ---
+# --- Handlers for conversational states and user flows ---
 @bot.message_handler(content_types=['text', 'photo', 'video', 'document', 'audio'], func=lambda message: get_state(message.from_user.id) == "create_code_awaiting_item")
 def create_code_item_handler(message):
     if not force_sub_check(message):
@@ -607,26 +616,13 @@ def redeem_code_handler(message):
     
     delete_state(user_id)
 
-@bot.message_handler(content_types=['text'], func=lambda message: get_state(message.from_user.id) == "set_delete_timer")
-def set_delete_timer_limit_handler(message):
-    if not force_sub_check(message):
-        return
-    user_id = message.from_user.id
-    lang_data = get_user_lang(user_id)
-    if not message.text.isdigit():
-        send_message(user_id, "Invalid input. Please send a number."); return
-    seconds = int(message.text)
-    admin_collection.update_one({'_id': 'bot_config'},{'$set': {'auto_delete_seconds': seconds}},upsert=True)
-    send_message(user_id, lang_data["set_delete_timer_success"].format(seconds=seconds), reply_markup=main_keyboard(get_user_lang_code(user_id)))
-    delete_state(user_id)
-
 @bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["upload_button"])
 def upload_button_handler(message):
     if not force_sub_check(message):
         return
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
-    send_message(message.chat.id, lang_data["upload_request_message"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
+    send_message(message.chat.id, lang_data["upload_request_message"], reply_markup=back_keyboard(get_user极lang_code(user_id)))
     set_state(user_id, "upload")
 
 @bot.message_handler(content_types=['photo', 'video', 'document', 'audio'], func=lambda message: get_state(message.from_user.id) == "upload")
@@ -651,7 +647,7 @@ def upload_media_handler(message):
         'file_type': media_type, 'message_id_in_storage': sent_message.message_id,
         'token': token, 'created_at': datetime.utcnow()
     }
-    files_collection.insert_one(file_doc)
+    files_collection.insert_one(file极doc)
     download_link = f"https://t.me/{bot.get_me().username}?start=getfile_{global_file_id}_{token}"
     send_message(message.chat.id, lang_data["upload_success_message"].format(file_id=global_file_id, download_link=download_link), reply_markup=main_keyboard(get_user_lang_code(user_id)))
     delete_state(user_id)
@@ -710,7 +706,7 @@ def support_button_handler(message):
         return
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
-    send_message(message.chat.id, lang_data["support_message_request"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
+    send_message(message.chat.id极, lang_data["support_message_request"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
     set_state(user_id, "support")
 
 @bot.message_handler(content_types=['text'], func=lambda message: get_state(message.from_user.id) == "support")
@@ -798,7 +794,7 @@ def admin_bot_status_handler(message):
     config = admin_collection.find_one({'_id': 'bot_config'}) or {}
     current_status = config.get("bot_status", lang_data["bot_status_on"])
     new_status = lang_data["bot_status_on"] if current_status == lang_data["bot_status_off"] else lang_data["bot_status_off"]
-    admin_collection.update_one({'_id': 'bot_config'}, {'$set': {'bot_status': new_status}}, upsert=True)
+    admin_collection.update_one({'_极id': 'bot_config'}, {'$set': {'bot_status': new_status}}, upsert=True)
     send_message(message.chat.id, lang_data["admin_bot_status_changed"].format(bot_status=new_status), reply_markup=admin_keyboard(get_user_lang_code(user_id)))
 
 @bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["admin_ban_button"] and is_admin(message.from_user.id))
@@ -859,7 +855,7 @@ def admin_broadcast_handler(message):
         return
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
-    send_message(message.chat.id, lang_data["admin_broadcast_request"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
+    send_message(message.chat.id, lang极data["admin_broadcast_request"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
     set_state(user_id, "broadcast_message")
 
 @bot.message_handler(content_types=['text'], func=lambda message: get_state(message.from_user.id) == "broadcast_message" and is_admin(message.from_user.id))
