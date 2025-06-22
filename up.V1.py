@@ -14,7 +14,7 @@ BOT_TOKEN = os.environ.get('BOT_TOKEN')
 ADMIN_IDS_STR = os.environ.get('ADMIN_IDS', '0')
 try:
     INITIAL_ADMIN_IDS = [int(i.strip()) for i in ADMIN_IDS_STR.split(',') if i.strip()]
-    OWNER_ID = INITIAL_ADMIN_IDS[0] if INITIAL_ADMIN_IDS else 0  # FIXED: was INITIAL_ADMIN_IDS instead of INITIAL_ADMIN_IDS[0]
+    OWNER_ID = INITIAL_ADMIN_IDS[0] if INITIAL_ADMIN_IDS else 0
 except (ValueError, IndexError):
     print("ERROR: Invalid ADMIN_IDS format in environment variables.")
     INITIAL_ADMIN_IDS = []
@@ -179,6 +179,7 @@ def set_state(user_id, state, data=None): user_states[user_id] = {'state': state
 def get_state(user_id): return user_states.get(user_id, {}).get('state')
 def get_state_data(user_id): return user_states.get(user_id, {}).get('data')
 def delete_state(user_id): user_states.pop(user_id, None)
+
 def main_keyboard(lang_code):
     lang_data = load_language(lang_code)
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
@@ -281,7 +282,7 @@ def verify_force_sub_callback(call):
     if not channels:
         bot.answer_callback_query(call.id, "No subscription required!")
         return
-
+    
     all_joined = True
     for ch in channels:
         try:
@@ -292,7 +293,7 @@ def verify_force_sub_callback(call):
         except Exception:
             all_joined = False
             break
-
+    
     if all_joined:
         bot.answer_callback_query(call.id, lang_data["force_sub_success"])
         bot.edit_message_text(
@@ -302,24 +303,6 @@ def verify_force_sub_callback(call):
         )
     else:
         bot.answer_callback_query(call.id, lang_data["force_sub_failure"])
-
-# --- Support Answer Button Fix ---
-@bot.callback_query_handler(func=lambda call: call.data.startswith("answer_support_"))
-def answer_support_callback(call):
-    user_id = int(call.data.split("_")[-1])
-    admin_id = call.from_user.id
-    send_message(admin_id, f"✏️ Type your reply to the user (ID: {user_id}):")
-    set_state(admin_id, "answer_support", data={"target_user_id": user_id})
-    bot.answer_callback_query(call.id, "Please type your reply to the user.")
-
-@bot.message_handler(content_types=['text'], func=lambda message: get_state(message.from_user.id) == "answer_support")
-def process_support_answer(message):
-    admin_id = message.from_user.id
-    state_data = get_state_data(admin_id)
-    target_user_id = state_data.get("target_user_id")
-    send_message(target_user_id, f"💬 Support reply:\n{message.text}")
-    send_message(admin_id, "✅ Your reply has been sent to the user.")
-    delete_state(admin_id)
 
 @bot.message_handler(commands=['start'])
 def start_command_handler(message):
@@ -608,6 +591,215 @@ def set_delete_timer_limit_handler(message):
     seconds = int(message.text)
     admin_collection.update_one({'_id': 'bot_config'},{'$set': {'auto_delete_seconds': seconds}},upsert=True)
     send_message(user_id, lang_data["set_delete_timer_success"].format(seconds=seconds), reply_markup=main_keyboard(get_user_lang_code(user_id)))
+    delete_state(user_id)
+
+@bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["upload_button"])
+def upload_button_handler(message):
+    if not force_sub_check(message):
+        return
+    user_id = message.from_user.id
+    lang_data = get_user_lang(user_id)
+    send_message(message.chat.id, lang_data["upload_request_message"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
+    set_state(user_id, "upload")
+
+@bot.message_handler(content_types=['photo', 'video', 'document', 'audio'], func=lambda message: get_state(message.from_user.id) == "upload")
+def upload_media_handler(message):
+    if not force_sub_check(message):
+        return
+    user_id = message.from_user.id
+    lang_data = get_user_lang(user_id)
+    media_type, telegram_file_id = None, None
+    if message.photo: media_type, telegram_file_id = "photo", message.photo[-1].file_id
+    elif message.video: media_type, telegram_file_id = "video", message.video.file_id
+    elif message.document: media_type, telegram_file_id = "document", message.document.file_id
+    elif message.audio: media_type, telegram_file_id = "music", message.audio.file_id
+    else: return
+    user_doc = users_collection.find_one({'_id': user_id}, {'caption': 1})
+    caption = user_doc.get('caption', lang_data["default_caption"]) if user_doc else lang_data["default_caption"]
+    sent_message = bot.copy_message(STORAGE_GROUP_ID, message.chat.id, message.message_id, caption=caption)
+    global_file_id = get_next_sequence_value('global_file_id')
+    token = ''.join(random.choices(string.ascii_letters + string.digits, k=16))
+    file_doc = {
+        '_id': global_file_id, 'uploader_id': user_id, 'file_id': telegram_file_id,
+        'file_type': media_type, 'message_id_in_storage': sent_message.message_id,
+        'token': token, 'created_at': datetime.now(UTC)
+    }
+    files_collection.insert_one(file_doc)
+    download_link = f"https://t.me/{bot.get_me().username}?start=getfile_{global_file_id}_{token}"
+    send_message(message.chat.id, lang_data["upload_success_message"].format(file_id=global_file_id, download_link=download_link), reply_markup=main_keyboard(get_user_lang_code(user_id)))
+    delete_state(user_id)
+
+@bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["caption_button"])
+def caption_button_handler(message):
+    if not force_sub_check(message):
+        return
+    user_id = message.from_user.id
+    lang_data = get_user_lang(user_id)
+    user_doc = users_collection.find_one({'_id': user_id}, {'caption': 1})
+    current_caption = user_doc.get('caption', lang_data["default_caption"]) if user_doc else lang_data["default_caption"]
+    send_message(message.chat.id, lang_data["caption_request_message"].format(current_caption=current_caption), reply_markup=back_keyboard(get_user_lang_code(user_id)))
+    set_state(user_id, "set-caption")
+
+@bot.message_handler(content_types=['text'], func=lambda message: get_state(message.from_user.id) == "set-caption")
+def set_caption_handler(message):
+    if not force_sub_check(message):
+        return
+    user_id = message.from_user.id
+    users_collection.update_one({'_id': user_id}, {'$set': {'caption': message.text}}, upsert=True)
+    send_message(message.chat.id, get_user_lang(user_id)["caption_saved_message"], reply_markup=main_keyboard(get_user_lang_code(user_id)))
+    delete_state(user_id)
+
+@bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["delete_button"])
+def delete_button_handler(message):
+    if not force_sub_check(message):
+        return
+    user_id = message.from_user.id
+    lang_data = get_user_lang(user_id)
+    send_message(message.chat.id, lang_data["delete_file_request_message"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
+    set_state(user_id, "delete-file")
+
+@bot.message_handler(content_types=['text'], func=lambda message: get_state(message.from_user.id) == "delete-file")
+def delete_file_handler(message):
+    if not force_sub_check(message):
+        return
+    user_id = message.from_user.id
+    lang_data = get_user_lang(user_id)
+    file_id_to_delete = message.text
+    if not file_id_to_delete.isdigit():
+        send_message(message.chat.id, lang_data["delete_file_invalid_id"], reply_markup=back_keyboard(get_user_lang_code(user_id))); return
+    file_doc = files_collection.find_one({'_id': int(file_id_to_delete)})
+    if file_doc and (file_doc['uploader_id'] == user_id or is_admin(user_id)):
+        files_collection.delete_one({'_id': int(file_id_to_delete)})
+        try: bot.delete_message(STORAGE_GROUP_ID, file_doc['message_id_in_storage'])
+        except Exception as e: print(f"Could not delete message from storage group: {e}")
+        send_message(message.chat.id, lang_data["delete_file_success"].format(file_id=file_id_to_delete), reply_markup=main_keyboard(get_user_lang_code(user_id)))
+    else:
+        send_message(message.chat.id, lang_data["file_not_found"], reply_markup=main_keyboard(get_user_lang_code(user_id)))
+    delete_state(user_id)
+
+@bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["support_button"])
+def support_button_handler(message):
+    if not force_sub_check(message):
+        return
+    user_id = message.from_user.id
+    lang_data = get_user_lang(user_id)
+    send_message(message.chat.id, lang_data["support_message_request"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
+    set_state(user_id, "support")
+
+@bot.message_handler(content_types=['text'], func=lambda message: get_state(message.from_user.id) == "support")
+def support_handler(message):
+    if not force_sub_check(message):
+        return
+    user_id = message.from_user.id
+    lang_data = get_user_lang(user_id)
+    support_message = lang_data["support_message_prefix"].format(first_name=message.from_user.first_name, user_id=user_id) + message.text
+    admin_markup = types.InlineKeyboardMarkup()
+    admin_markup.add(types.InlineKeyboardButton(text=lang_data["support_answer_button"], callback_data=f"answer_support_{user_id}"))
+    send_message(OWNER_ID, support_message, reply_markup=admin_markup)
+    send_message(message.chat.id, lang_data["support_message_sent"], reply_markup=main_keyboard(get_user_lang_code(user_id)))
+    delete_state(user_id)
+
+@bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["profile_button"])
+def profile_button_handler(message):
+    if not force_sub_check(message):
+        return
+    user_id = message.from_user.id
+    lang_data = get_user_lang(user_id)
+    file_count = files_collection.count_documents({'uploader_id': user_id})
+    user_doc = users_collection.find_one({'_id': user_id})
+    first_name = user_doc.get('first_name', message.from_user.first_name) if user_doc else message.from_user.first_name
+    profile_text = lang_data["profile_message"].format(first_name=first_name, user_id=user_id, file_count=file_count)
+    send_message(message.chat.id, profile_text, reply_markup=main_keyboard(get_user_lang_code(user_id)))
+
+@bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["get_file_button"])
+def get_file_button_handler(message):
+    if not force_sub_check(message):
+        return
+    user_id = message.from_user.id
+    lang_data = get_user_lang(user_id)
+    send_message(message.chat.id, lang_data["get_file_request_message"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
+    set_state(user_id, "get_file_by_id")
+
+@bot.message_handler(content_types=['text'], func=lambda message: get_state(message.from_user.id) == "get_file_by_id")
+def get_file_by_id_handler(message):
+    if not force_sub_check(message):
+        return
+    user_id = message.from_user.id
+    lang_data = get_user_lang(user_id)
+    file_id_to_get = message.text
+    if not file_id_to_get.isdigit():
+        send_message(message.chat.id, lang_data["delete_file_invalid_id"]); delete_state(user_id); return
+    file_doc = files_collection.find_one({'_id': int(file_id_to_get)})
+    if file_doc:
+        send_file_by_id(user_id, file_doc["file_type"], file_doc["file_id"])
+        send_confirmation_disclaimer(user_id)
+    else:
+        send_message(user_id, lang_data["file_not_found"])
+    delete_state(user_id)
+    send_message(message.chat.id, lang_data["main_menu_back"], reply_markup=main_keyboard(get_user_lang_code(user_id)))
+
+@bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["back_button"])
+def back_button_handler(message):
+    if not force_sub_check(message):
+        return
+    user_id = message.from_user.id
+    delete_state(user_id)
+    send_message(message.chat.id, get_user_lang(user_id)["main_menu_back"], reply_markup=main_keyboard(get_user_lang_code(user_id)))
+
+@bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["redeem_button"])
+def redeem_button_handler(message):
+    if not force_sub_check(message):
+        return
+    redeem_command_handler(message)
+
+@bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["admin_stats_button"] and is_admin(message.from_user.id))
+def admin_stats_handler(message):
+    if not force_sub_check(message):
+        return
+    user_id = message.from_user.id
+    lang_data = get_user_lang(user_id)
+    user_count = users_collection.count_documents({})
+    config = admin_collection.find_one({'_id': 'bot_config'}) or {}
+    bot_status = config.get("bot_status", lang_data["bot_status_on"])
+    stats_text = lang_data["admin_stats_message"].format(user_count=user_count, bot_status=bot_status)
+    send_message(message.chat.id, stats_text, reply_markup=admin_keyboard(get_user_lang_code(user_id)))
+
+@bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["admin_bot_status_button"] and is_admin(message.from_user.id))
+def admin_bot_status_handler(message):
+    if not force_sub_check(message):
+        return
+    user_id = message.from_user.id
+    lang_data = get_user_lang(user_id)
+    config = admin_collection.find_one({'_id': 'bot_config'}) or {}
+    current_status = config.get("bot_status", lang_data["bot_status_on"])
+    new_status = lang_data["bot_status_on"] if current_status == lang_data["bot_status_off"] else lang_data["bot_status_off"]
+    admin_collection.update_one({'_id': 'bot_config'}, {'$set': {'bot_status': new_status}}, upsert=True)
+    send_message(message.chat.id, lang_data["admin_bot_status_changed"].format(bot_status=new_status), reply_markup=admin_keyboard(get_user_lang_code(user_id)))
+
+@bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["admin_ban_button"] and is_admin(message.from_user.id))
+def admin_ban_handler(message):
+    if not force_sub_check(message):
+        return
+    user_id = message.from_user.id
+    lang_data = get_user_lang(user_id)
+    send_message(message.chat.id, lang_data["admin_ban_request"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
+    set_state(user_id, "ban_user")
+
+@bot.message_handler(content_types=['text'], func=lambda message: get_state(message.from_user.id) == "ban_user" and is_admin(message.from_user.id))
+def ban_user_message_handler(message):
+    if not force_sub_check(message):
+        return
+    user_id = message.from_user.id
+    lang_data = get_user_lang(user_id)
+    try:
+        user_id_to_ban = int(message.text)
+        if user_id_to_ban == OWNER_ID or is_admin(user_id_to_ban):
+            send_message(message.chat.id, "You cannot ban an admin or the Bot Owner.")
+            delete_state(user_id); return
+        users_collection.update_one({'_id': user_id_to_ban}, {'$set': {'banned': True}}, upsert=True)
+        send_message(message.chat.id, lang_data["admin_ban_success"].format(user_id=user_id_to_ban), reply_markup=admin_keyboard(get_user_lang_code(user_id)))
+    except ValueError:
+        send_message(message.chat.id, lang_data["admin_invalid_user_id"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
     delete_state(user_id)
 
 @bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["admin_unban_button"] and is_admin(message.from_user.id))
