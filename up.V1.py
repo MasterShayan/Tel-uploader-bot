@@ -140,25 +140,40 @@ def get_state(user_id): return user_states.get(user_id, {}).get('state')
 def get_state_data(user_id): return user_states.get(user_id, {}).get('data')
 def delete_state(user_id): user_states.pop(user_id, None)
 
-# --- Force Subscription ---
+# --- Force Subscription (Robust, Multi-Channel) ---
 def force_sub_check(message):
     user_id = message.from_user.id
     config = admin_collection.find_one({'_id': 'bot_config'}) or {}
-    channel = config.get("force_sub_channel")
-    if not channel:
+    channels = config.get("force_sub_channel")
+    if not channels:
         return True
-    try:
-        member = bot.get_chat_member(channel, user_id)
-        if member.status in ['member', 'administrator', 'creator']:
-            return True
-        else:
-            raise Exception("Not a member")
-    except Exception:
-        lang_data = get_user_lang(user_id)
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton(lang_data.get("join_channel_button", "Join Channel"), url=f"https://t.me/{channel.replace('@','')}"))
-        send_message(user_id, lang_data.get("force_sub_message", "Please join our channel to use the bot."), reply_markup=markup)
-        return False
+    if isinstance(channels, str):
+        channels = [channels]
+    unjoined_channels = []
+    for channel in channels:
+        try:
+            member = bot.get_chat_member(channel, user_id)
+            if member.status not in ['member', 'administrator', 'creator']:
+                unjoined_channels.append(channel)
+        except Exception as e:
+            print(f"Error checking channel {channel}: {e}")
+            unjoined_channels.append(channel)
+    if not unjoined_channels:
+        return True
+    lang_data = get_user_lang(user_id)
+    markup = types.InlineKeyboardMarkup()
+    for channel in unjoined_channels:
+        channel_handle = channel.replace('@', '')
+        markup.add(types.InlineKeyboardButton(
+            lang_data.get("join_channel_button", f"Join {channel}"),
+            url=f"https://t.me/{channel_handle}"
+        ))
+    send_message(
+        user_id,
+        lang_data.get("force_sub_message", "📢 You must join these channel(s) to use the bot:"),
+        reply_markup=markup
+    )
+    return False
 
 # --- Keyboards ---
 def main_keyboard(lang_code):
@@ -182,6 +197,7 @@ def back_keyboard(lang_code):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add(types.KeyboardButton(lang_data["back_button"]))
     return markup
+
 # --- Command Handlers ---
 @bot.message_handler(commands=['start'])
 def start_command_handler(message):
@@ -328,6 +344,7 @@ def check_delete_timer_command_handler(message):
     config = admin_collection.find_one({'_id': 'bot_config'}) or {}
     seconds = config.get('auto_delete_seconds', 0)
     send_message(message.chat.id, lang_data["check_delete_timer_status"].format(seconds=seconds))
+
 # --- Handlers for conversational states ---
 @bot.message_handler(content_types=['text', 'photo', 'video', 'document', 'audio'], func=lambda message: get_state(message.from_user.id) == "create_code_awaiting_item")
 def create_code_item_handler(message):
@@ -507,6 +524,7 @@ def upload_media_handler(message):
     download_link = f"https://t.me/{bot.get_me().username}?start=getfile_{global_file_id}_{token}"
     send_message(message.chat.id, lang_data["upload_success_message"].format(file_id=global_file_id, download_link=download_link), reply_markup=main_keyboard(get_user_lang_code(user_id)))
     delete_state(user_id)
+
 @bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["caption_button"])
 def caption_button_handler(message):
     if not force_sub_check(message):
