@@ -33,7 +33,7 @@ files_collection = db['files']
 counters_collection = db['counters']
 force_sub_collection = db['force_sub_channels']
 
-bot = telebot.TeleBot(BOT_TOKEN)
+bot = telebot.TeleBot(BOT_TOKEN, threaded=True, num_threads=10)
 
 def get_next_sequence_value(sequence_name):
     if counters_collection.find_one({'_id': sequence_name}) is None:
@@ -79,14 +79,21 @@ def get_user_lang(user_id):
 def get_force_sub_channels():
     return list(force_sub_collection.find({}))
 
-def check_user_in_channels(user_id, channels):
-    for channel in channels:
+def force_sub_check(message):
+    user_id = message.from_user.id
+    if is_admin(user_id) or user_id == OWNER_ID:
+        return True
+    if message.text and message.text.startswith(('/addforcesub', '/removeforcesub', '/listforcesub')):
+        return True
+    channels = get_force_sub_channels()
+    for ch in channels:
         try:
-            member = bot.get_chat_member(channel['channel_id'], user_id)
+            member = bot.get_chat_member(ch['channel_id'], user_id)
             if member.status in ['left', 'kicked']:
+                send_force_sub_message(message.chat.id, user_id)
                 return False
-        except Exception as e:
-            print(f"Error checking membership: {e}")
+        except Exception:
+            send_force_sub_message(message.chat.id, user_id)
             return False
     return True
 
@@ -96,44 +103,27 @@ def send_force_sub_message(chat_id, user_id):
         return True
 
     lang_data = get_user_lang(user_id)
-    text_lines = [lang_data["force_sub_required"].split('\n')[0]]  # Only the first line ("⛔ You must join these channels to use this bot:")
-
+    text_lines = ["🚫 You must join these channels to use this bot:"]
     markup = types.InlineKeyboardMarkup()
+
     for ch in channels:
-        # Add a row with a join button for each channel
+        text_lines.append(f"- {ch['title']}")
         join_btn = types.InlineKeyboardButton(
             text=f"🔗 Join {ch['title']}",
             url=ch.get('invite_link', 'https://t.me/')
         )
         markup.add(join_btn)
 
-    # Add a row with the verify button (only once, below all channels)
     verify_btn = types.InlineKeyboardButton(
         text=lang_data["force_sub_verify_button"],
         callback_data=f"force_sub_verify:{user_id}"
     )
     markup.add(verify_btn)
 
-    # List channels in the message text (optional, for clarity)
-    for ch in channels:
-        text_lines.append(f"- {ch['title']}")
-
     text_lines.append("\nJoin them and press ✅ Verify Subscription.")
     text = "\n".join(text_lines)
     send_message(chat_id, text, reply_markup=markup)
     return False
-
-def force_sub_check(message):
-    user_id = message.from_user.id
-    if is_admin(user_id) or user_id == OWNER_ID:
-        return True
-    if message.text and message.text.startswith(('/addforcesub', '/removeforcesub', '/listforcesub')):
-        return True
-    user_doc = users_collection.find_one({'_id': user_id}) or {}
-    if not user_doc.get('force_sub_passed', False):
-        if not send_force_sub_message(message.chat.id, user_id):
-            return False
-    return True
 
 def send_message(chat_id, text, reply_markup=None, parse_mode="HTML"):
     try:
@@ -189,6 +179,7 @@ def set_state(user_id, state, data=None): user_states[user_id] = {'state': state
 def get_state(user_id): return user_states.get(user_id, {}).get('state')
 def get_state_data(user_id): return user_states.get(user_id, {}).get('data')
 def delete_state(user_id): user_states.pop(user_id, None)
+
 def main_keyboard(lang_code):
     lang_data = load_language(lang_code)
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
@@ -291,12 +282,19 @@ def verify_force_sub_callback(call):
     if not channels:
         bot.answer_callback_query(call.id, "No subscription required!")
         return
-    if check_user_in_channels(user_id, channels):
-        users_collection.update_one(
-            {'_id': user_id},
-            {'$set': {'force_sub_passed': True}},
-            upsert=True
-        )
+    
+    all_joined = True
+    for ch in channels:
+        try:
+            member = bot.get_chat_member(ch['channel_id'], user_id)
+            if member.status in ['left', 'kicked']:
+                all_joined = False
+                break
+        except Exception:
+            all_joined = False
+            break
+    
+    if all_joined:
         bot.answer_callback_query(call.id, lang_data["force_sub_success"])
         bot.edit_message_text(
             lang_data["force_sub_success"],
