@@ -10,7 +10,6 @@ from datetime import datetime
 import threading
 import time
 
-# --- Config (Reading from Heroku Environment) ---
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
 ADMIN_IDS_STR = os.environ.get('ADMIN_IDS', '0')
 try:
@@ -25,7 +24,6 @@ STORAGE_GROUP_ID = int(os.environ.get('STORAGE_GROUP_ID'))
 MONGODB_URI = os.environ.get('MONGODB_URI')
 DEFAULT_LANGUAGE = "en"
 
-# --- MongoDB Setup ---
 client = pymongo.MongoClient(MONGODB_URI)
 db = client['uploader_bot_db']
 users_collection = db['users']
@@ -33,11 +31,10 @@ admin_collection = db['admin_config']
 redeem_codes_collection = db['redeem_codes']
 files_collection = db['files']
 counters_collection = db['counters']
-force_sub_collection = db['force_sub_channels']  # NEW: For force subscription
+force_sub_collection = db['force_sub_channels']
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# --- Helper for Global IDs ---
 def get_next_sequence_value(sequence_name):
     if counters_collection.find_one({'_id': sequence_name}) is None:
         counters_collection.insert_one({'_id': sequence_name, 'sequence_value': 0})
@@ -48,7 +45,6 @@ def get_next_sequence_value(sequence_name):
     )
     return sequence_document['sequence_value']
 
-# --- Admin Management Helpers ---
 def get_admin_list():
     config = admin_collection.find_one({'_id': 'bot_config'})
     if config and 'admin_ids' in config:
@@ -66,7 +62,6 @@ def get_admin_list():
 def is_admin(user_id):
     return user_id in get_admin_list()
 
-# --- Language Support ---
 LANGUAGES = {"en": "English"}
 def load_language(lang_code):
     try:
@@ -81,7 +76,6 @@ def get_user_lang_code(user_id):
 def get_user_lang(user_id):
     return load_language(get_user_lang_code(user_id))
 
-# --- Force Subscription Helpers ---
 def get_force_sub_channels():
     return list(force_sub_collection.find({}))
 
@@ -99,8 +93,7 @@ def check_user_in_channels(user_id, channels):
 def send_force_sub_message(chat_id, user_id):
     channels = get_force_sub_channels()
     if not channels:
-        return True  # No force sub configured, allow usage
-
+        return True
     lang_data = get_user_lang(user_id)
     channels_list = "\n".join(
         lang_data["force_sub_channel_entry"].format(
@@ -124,20 +117,16 @@ def send_force_sub_message(chat_id, user_id):
 
 def force_sub_check(message):
     user_id = message.from_user.id
-    # Admins and owner are exempt
     if is_admin(user_id) or user_id == OWNER_ID:
         return True
-    # Exempt force sub admin commands
     if message.text and message.text.startswith(('/addforcesub', '/removeforcesub', '/listforcesub')):
         return True
-    # Check if user has passed force sub
     user_doc = users_collection.find_one({'_id': user_id}) or {}
     if not user_doc.get('force_sub_passed', False):
         if not send_force_sub_message(message.chat.id, user_id):
             return False
     return True
 
-# --- Bot Functions ---
 def send_message(chat_id, text, reply_markup=None, parse_mode="HTML"):
     try:
         return bot.send_message(chat_id, text, parse_mode=parse_mode, reply_markup=reply_markup, disable_web_page_preview=True)
@@ -187,14 +176,11 @@ def send_confirmation_disclaimer(chat_id):
     if confirmation_message and delay > 0:
         schedule_message_deletion(chat_id, confirmation_message.message_id, delay)
 
-# --- State Management ---
 user_states = {}
 def set_state(user_id, state, data=None): user_states[user_id] = {'state': state, 'data': data}
 def get_state(user_id): return user_states.get(user_id, {}).get('state')
 def get_state_data(user_id): return user_states.get(user_id, {}).get('data')
 def delete_state(user_id): user_states.pop(user_id, None)
-
-# --- Keyboards ---
 def main_keyboard(lang_code):
     lang_data = load_language(lang_code)
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
@@ -217,7 +203,6 @@ def back_keyboard(lang_code):
     markup.add(types.KeyboardButton(lang_data["back_button"]))
     return markup
 
-# --- Force Sub Admin Commands ---
 @bot.message_handler(commands=['addforcesub'])
 def add_force_sub_channel(message):
     if not is_admin(message.from_user.id):
@@ -254,7 +239,6 @@ def list_force_sub_channels(message):
         )
     send_message(message.chat.id, "\n".join(response), parse_mode="Markdown")
 
-# --- Force Sub State Handlers ---
 @bot.message_handler(func=lambda message: get_state(message.from_user.id) == "add_force_sub")
 def add_force_sub_handler(message):
     try:
@@ -291,7 +275,6 @@ def remove_force_sub_handler(message):
     except ValueError:
         send_message(message.chat.id, "Invalid channel ID format.")
 
-# --- Force Sub Verification Callback ---
 @bot.callback_query_handler(func=lambda call: call.data.startswith('force_sub_verify:'))
 def verify_force_sub_callback(call):
     user_id = int(call.data.split(':')[1])
@@ -315,7 +298,6 @@ def verify_force_sub_callback(call):
     else:
         bot.answer_callback_query(call.id, lang_data["force_sub_failure"])
 
-# --- Command Handlers (with force_sub_check) ---
 @bot.message_handler(commands=['start'])
 def start_command_handler(message):
     if not force_sub_check(message):
@@ -462,7 +444,6 @@ def check_delete_timer_command_handler(message):
     seconds = config.get('auto_delete_seconds', 0)
     send_message(message.chat.id, lang_data["check_delete_timer_status"].format(seconds=seconds))
 
-# --- Handlers for conversational states ---
 @bot.message_handler(content_types=['text', 'photo', 'video', 'document', 'audio'], func=lambda message: get_state(message.from_user.id) == "create_code_awaiting_item")
 def create_code_item_handler(message):
     if not force_sub_check(message):
@@ -542,10 +523,10 @@ def redeem_code_handler(message):
         send_message(user_id, lang_data["redeem_error_already_claimed"], reply_markup=main_keyboard(get_user_lang_code(user_id))); delete_state(user_id); return
     if code_doc['redemption_limit'] != 0 and code_doc['redemption_count'] >= code_doc['redemption_limit']:
         send_message(user_id, lang_data["redeem_error_limit_reached"], reply_markup=main_keyboard(get_user_lang_code(user_id))); delete_state(user_id); return
-    
+
     item_type = code_doc['item_type']
     prize_message_sent = False
-    
+
     if item_type == 'code_pool':
         if not code_doc.get('item_content', {}).get('codes'):
             send_message(user_id, lang_data["redeem_error_pool_empty"], reply_markup=main_keyboard(get_user_lang_code(user_id))); delete_state(user_id); return
@@ -590,7 +571,7 @@ def redeem_code_handler(message):
             notification_text = lang_data["admin_redeem_notification"].format(username=username, user_id=user_id, code=user_code, remaining=remaining)
             send_message(creator_id, notification_text)
         except Exception as e: print(f"Failed to send admin notification: {e}")
-    
+
     delete_state(user_id)
 
 @bot.message_handler(content_types=['text'], func=lambda message: get_state(message.from_user.id) == "set_delete_timer")
@@ -887,7 +868,6 @@ def forward_broadcast_message_handler(message):
     send_message(message.chat.id, lang_data["admin_forward_broadcast_report"].format(success_count=success_count, fail_count=fail_count), reply_markup=admin_keyboard(get_user_lang_code(user_id)))
     delete_state(user_id)
 
-# --- Main ---
 if __name__ == "__main__":
     counters_collection.update_one({'_id': 'global_file_id'}, {'$setOnInsert': {'sequence_value': 0}}, upsert=True)
     get_admin_list()
