@@ -432,10 +432,13 @@ def start_command_handler(message):
         return
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
-    if len(message.text.split()) > 1 and message.text.split()[1].startswith('getfile_'):
+
+    args = message.text.split()
+    # Deep link file retrieval: /start getfile_<fileid>_<token>
+    if len(args) > 1 and args[1].startswith('getfile_'):
         try:
-            file_info = message.text.split()[1].replace('getfile_', '')
-            global_file_id, token = file_info.split('_')
+            file_info = args[1][len('getfile_'):]  # Remove 'getfile_' prefix
+            global_file_id, token = file_info.split('_', 1)
             file_doc = files_collection.find_one({'_id': int(global_file_id)})
             if file_doc and file_doc["token"] == token:
                 send_file_by_id(message.chat.id, file_doc["file_type"], file_doc["file_id"])
@@ -446,7 +449,10 @@ def start_command_handler(message):
             print(f"Error in getfile link: {e}")
             send_message(message.chat.id, lang_data["download_link_error"])
     else:
-        users_collection.update_one({'_id': user_id}, {'$set': {'username': message.from_user.username, 'first_name': message.from_user.first_name}}, upsert=True)
+        users_collection.update_one({'_id': user_id}, {'$set': {
+            'username': message.from_user.username,
+            'first_name': message.from_user.first_name
+        }}, upsert=True)
         send_message(message.chat.id, lang_data["start_message"], reply_markup=main_keyboard(DEFAULT_LANGUAGE))
 
 @bot.message_handler(commands=['panel'])
