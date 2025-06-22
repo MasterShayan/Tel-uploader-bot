@@ -121,20 +121,44 @@ def get_stats():
         "banned": db.banned.count_documents({})
     }
 
-# Start command
+# Start command (FIXED: handles /start getfile_<file_unique_id>)
 @bot.message_handler(commands=['start'])
 def start(message):
     user_id = message.chat.id
     if is_banned(user_id):
         bot.send_message(user_id, "You are banned from using this bot.")
         return
-    db.users.update_one({"user_id": user_id}, {"$set": {"user_id": user_id}}, upsert=True)
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.row("📤 Upload File", "📁 My Files")
-    markup.row("🎁 Redeem Code", "👤 Profile")
-    markup.row("🛠 Admin Panel", "Support 🗣")
-    markup.row("🌐 Language")
-    bot.send_message(user_id, "Welcome to the File Bot!", reply_markup=markup)
+
+    args = message.text.split()
+    # Deep link file retrieval: /start getfile_<file_unique_id>
+    if len(args) > 1 and args[1].startswith('getfile_'):
+        try:
+            file_unique_id = args[1].replace('getfile_', '')
+            file = db.files.find_one({"file_unique_id": file_unique_id})
+            if file:
+                if file['file_type'] == 'document':
+                    bot.send_document(user_id, file['file_id'])
+                elif file['file_type'] == 'photo':
+                    bot.send_photo(user_id, file['file_id'])
+                elif file['file_type'] == 'video':
+                    bot.send_video(user_id, file['file_id'])
+                elif file['file_type'] == 'audio':
+                    bot.send_audio(user_id, file['file_id'])
+                else:
+                    bot.send_message(user_id, "Unsupported file type")
+            else:
+                bot.send_message(user_id, "File not found or expired")
+        except Exception as e:
+            print(f"File retrieval error: {e}")
+            bot.send_message(user_id, "Invalid file link")
+    else:
+        db.users.update_one({"user_id": user_id}, {"$set": {"user_id": user_id}}, upsert=True)
+        markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+        markup.row("📤 Upload File", "📁 My Files")
+        markup.row("🎁 Redeem Code", "👤 Profile")
+        markup.row("🛠 Admin Panel", "Support 🗣")
+        markup.row("🌐 Language")
+        bot.send_message(user_id, "Welcome to the File Bot!", reply_markup=markup)
 
 # Language selection
 @bot.message_handler(func=lambda message: message.text == "🌐 Language")
@@ -202,7 +226,7 @@ def handle_file(message):
 
     timer = 0  # Default: no auto-delete
     save_file(file_id, file_unique_id, user_id, file_type, file_name, file_size, timer)
-    link = f"https://t.me/{bot.get_me().username}?start={file_unique_id}"
+    link = f"https://t.me/{bot.get_me().username}?start=getfile_{file_unique_id}"
     bot.send_message(user_id, f"File uploaded! Download link:\n{link}")
 
 # My Files
@@ -230,7 +254,7 @@ def handle_redeem_code(message):
         bot.send_message(user_id, "Code redeemed successfully!")
     else:
         bot.send_message(user_id, "Invalid or already used code.")
-    user_states.pop(user_id, None)
+    user_states.pop(message.chat.id, None)
 
 # Profile
 @bot.message_handler(func=lambda message: message.text == "👤 Profile")
@@ -366,8 +390,7 @@ def stats(message):
 def back(message):
     start(message)
 
-# --- SUPPORT SYSTEM (FIXED) ---
-
+# --- SUPPORT SYSTEM (FIXED, only one copy) ---
 @bot.message_handler(func=lambda message: message.text == "Support 🗣")
 def support_start(message):
     bot.send_message(message.chat.id, "Please send your support message:")
@@ -400,31 +423,11 @@ def send_reply_to_user(message):
     except Exception as e:
         bot.send_message(message.from_user.id, f"Failed to send reply: {e}")
     user_states.pop(message.from_user.id, None)
-
-# --- END SUPPORT SYSTEM ---
-
-# --- SUPPORT FIX: Owner can answer user ---
-@bot.callback_query_handler(func=lambda call: call.data.startswith("answer_user_"))
-def answer_user_callback(call):
-    user_id = int(call.data.split("_")[-1])
-    bot.send_message(call.from_user.id, f"Please type your reply to user {user_id}:")
-    user_states[call.from_user.id] = {"reply_to": user_id}
-    bot.answer_callback_query(call.id, "Please type your reply.")
-
-@bot.message_handler(func=lambda message: user_states.get(message.from_user.id, {}).get("reply_to"))
-def send_reply_to_user(message):
-    user_id = user_states[message.from_user.id]["reply_to"]
-    try:
-        bot.send_message(user_id, f"Support reply from owner:\n\n{message.text}")
-        bot.send_message(message.from_user.id, "Your reply has been sent to the user.")
-    except Exception as e:
-        bot.send_message(message.from_user.id, f"Failed to send reply: {e}")
-    user_states.pop(message.from_user.id, None)
-
 # --- END SUPPORT SYSTEM ---
 
 # Main polling loop
-bot.infinity_polling()
+if __name__ == "__main__":
+    bot.infinity_polling()
 
 @bot.message_handler(commands=['start'])
 def start_command_handler(message):
