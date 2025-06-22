@@ -78,7 +78,7 @@
     "admin_broadcast_report": "📢 Broadcast Report:\n\n✅ Successful: {success_count}\n❌ Failed: {fail_count}",
     "admin_forward_broadcast_request": "📤 Send message for forward broadcast:",
     "admin_forward_broadcast_report": "📤 Forward Broadcast Report:\n\n✅ Successful: {success_count}\n❌ Failed: {fail_count}",
-    "force_sub_required": "⛔ You must join these channels to use this bot:\n{channels_list}\n\nJoin them and press ✅ Verify Subscription.",
+    "force_sub_required": "⛔ You must join these channels to use this bot:",
     "force_sub_verify_button": "✅ Verify Subscription",
     "force_sub_success": "✅ Access granted! You can now use the bot.",
     "force_sub_failure": "❌ You haven't joined all required channels. Please join all channels and try again.",
