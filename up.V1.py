@@ -94,25 +94,33 @@ def send_force_sub_message(chat_id, user_id):
     channels = get_force_sub_channels()
     if not channels:
         return True
+
     lang_data = get_user_lang(user_id)
-    channels_list = "\n".join(
-        lang_data["force_sub_channel_entry"].format(
-            title=ch['title'],
-            id=ch['channel_id'],
-            invite_link=ch.get('invite_link', 'N/A')
-        ) for ch in channels
-    )
+    text_lines = [lang_data["force_sub_required"].split('\n')[0]]  # Only the first line ("⛔ You must join these channels to use this bot:")
+
     markup = types.InlineKeyboardMarkup()
-    verify_button = types.InlineKeyboardButton(
+    for ch in channels:
+        # Add a row with a join button for each channel
+        join_btn = types.InlineKeyboardButton(
+            text=f"🔗 Join {ch['title']}",
+            url=ch.get('invite_link', 'https://t.me/')
+        )
+        markup.add(join_btn)
+
+    # Add a row with the verify button (only once, below all channels)
+    verify_btn = types.InlineKeyboardButton(
         text=lang_data["force_sub_verify_button"],
         callback_data=f"force_sub_verify:{user_id}"
     )
-    markup.add(verify_button)
-    send_message(
-        chat_id,
-        lang_data["force_sub_required"].format(channels_list=channels_list),
-        reply_markup=markup
-    )
+    markup.add(verify_btn)
+
+    # List channels in the message text (optional, for clarity)
+    for ch in channels:
+        text_lines.append(f"- {ch['title']}")
+
+    text_lines.append("\nJoin them and press ✅ Verify Subscription.")
+    text = "\n".join(text_lines)
+    send_message(chat_id, text, reply_markup=markup)
     return False
 
 def force_sub_check(message):
