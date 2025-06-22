@@ -11,7 +11,11 @@ import time
 # Load environment variables
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 MONGO_URI = os.getenv('MONGO_URI')
-OWNER_ID = int(os.getenv('OWNER_ID'))
+ADMIN_IDS = os.getenv('ADMIN_IDS')
+if not ADMIN_IDS:
+    raise ValueError("ADMIN_IDS environment variable is not set!")
+admin_ids_list = [int(i.strip()) for i in ADMIN_IDS.split(',') if i.strip()]
+OWNER_ID = admin_ids_list[0]  # The first admin is the owner
 CHANNEL_ID = os.getenv('CHANNEL_ID')
 
 bot = telebot.TeleBot(BOT_TOKEN)
@@ -363,6 +367,7 @@ def back(message):
     start(message)
 
 # --- SUPPORT SYSTEM (FIXED) ---
+
 @bot.message_handler(func=lambda message: message.text == "Support 🗣")
 def support_start(message):
     bot.send_message(message.chat.id, "Please send your support message:")
@@ -373,14 +378,30 @@ def handle_support_message(message):
     support_text = message.text
     user_id = message.chat.id
 
-    # Send support message to owner with "Answer User" button
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton("Answer User", callback_data=f"answer_user_{user_id}"))
     bot.send_message(OWNER_ID, f"Support message from user {user_id}:\n\n{support_text}", reply_markup=markup)
-
     bot.send_message(user_id, "Your message has been sent to the owner. They will reply soon.")
-    # Clear support state for user
     user_states.pop(user_id, None)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("answer_user_"))
+def answer_user_callback(call):
+    user_id = int(call.data.split("_")[-1])
+    bot.send_message(call.from_user.id, f"Please type your reply to user {user_id}:")
+    user_states[call.from_user.id] = {"reply_to": user_id}
+    bot.answer_callback_query(call.id, "Please type your reply.")
+
+@bot.message_handler(func=lambda message: user_states.get(message.from_user.id, {}).get("reply_to"))
+def send_reply_to_user(message):
+    user_id = user_states[message.from_user.id]["reply_to"]
+    try:
+        bot.send_message(user_id, f"Support reply from owner:\n\n{message.text}")
+        bot.send_message(message.from_user.id, "Your reply has been sent to the user.")
+    except Exception as e:
+        bot.send_message(message.from_user.id, f"Failed to send reply: {e}")
+    user_states.pop(message.from_user.id, None)
+
+# --- END SUPPORT SYSTEM ---
 
 # --- SUPPORT FIX: Owner can answer user ---
 @bot.callback_query_handler(func=lambda call: call.data.startswith("answer_user_"))
