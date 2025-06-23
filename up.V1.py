@@ -141,6 +141,14 @@ def get_state(user_id): return user_states.get(user_id, {}).get('state')
 def get_state_data(user_id): return user_states.get(user_id, {}).get('data')
 def delete_state(user_id): user_states.pop(user_id, None)
 
+@bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["back_button"])
+def back_button_handler(message):
+    if not force_sub_check(message):
+        return
+    user_id = message.from_user.id
+    delete_state(user_id)
+    send_message(message.chat.id, get_user_lang(user_id)["main_menu_back"], reply_markup=main_keyboard(get_user_lang_code(user_id)))
+
 # --- Force Subscription (OWNER ONLY for add/remove/list) ---
 @bot.message_handler(commands=['addforcesub'])
 def add_forcesub_handler(message):
@@ -1125,14 +1133,6 @@ def get_file_by_id_handler(message):
         
     delete_state(user_id)
     send_message(message.chat.id, lang_data["main_menu_back"], reply_markup=main_keyboard(get_user_lang_code(user_id)))
-
-@bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["back_button"])
-def back_button_handler(message):
-    if not force_sub_check(message):
-        return
-    user_id = message.from_user.id
-    delete_state(user_id)
-    send_message(message.chat.id, get_user_lang(user_id)["main_menu_back"], reply_markup=main_keyboard(get_user_lang_code(user_id)))
 
 @bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["redeem_button"])
 def redeem_button_handler(message):
