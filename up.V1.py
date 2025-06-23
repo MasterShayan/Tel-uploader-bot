@@ -321,7 +321,18 @@ def main_keyboard(lang_code):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     btn1, btn2, btn3 = types.KeyboardButton(lang_data["upload_button"]), types.KeyboardButton(lang_data["delete_button"]), types.KeyboardButton(lang_data["get_file_button"])
     btn4, btn5, btn6, btn7 = types.KeyboardButton(lang_data["redeem_button"]), types.KeyboardButton(lang_data["caption_button"]), types.KeyboardButton(lang_data["support_button"]), types.KeyboardButton(lang_data["profile_button"])
-    markup.add(btn1); markup.add(btn2, btn3); markup.add(btn4, btn5); markup.add(btn6, btn7)
+    
+    # This is the new button for the forwarding feature
+    btn8 = types.KeyboardButton(lang_data["forward_button"])
+    
+    # This line is updated to include the new button on the first row
+    markup.add(btn1, btn8)
+    
+    # These lines remain the same
+    markup.add(btn2, btn3)
+    markup.add(btn4, btn5)
+    markup.add(btn6, btn7)
+    
     return markup
 
 def admin_keyboard(lang_code):
@@ -345,20 +356,29 @@ def start_command_handler(message):
         return
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
+    
+    # Check if the start command has a payload (e.g., from a share link)
     if len(message.text.split()) > 1 and message.text.split()[1].startswith('getfile_'):
         try:
-            file_info = message.text.split()[1].replace('getfile_', '')
+            file_info = message.text.split(' ')[1].replace('getfile_', '')
             global_file_id, token = file_info.split('_')
             file_doc = files_collection.find_one({'_id': int(global_file_id)})
-            if file_doc and file_doc["token"] == token:
-                send_file_by_id(message.chat.id, file_doc["file_type"], file_doc["file_id"])
-                send_confirmation_disclaimer(message.chat.id)
+            
+            if file_doc and file_doc.get("token") == token:
+                # Check if it's a 'post' or a media file
+                if file_doc.get('file_type') == 'post':
+                    bot.copy_message(message.chat.id, STORAGE_GROUP_ID, file_doc['message_id_in_storage'])
+                    send_confirmation_disclaimer(message.chat.id)
+                else: # It's a regular file
+                    send_file_by_id(message.chat.id, file_doc["file_type"], file_doc["file_id"])
+                    send_confirmation_disclaimer(message.chat.id)
             else:
                 send_message(message.chat.id, lang_data["download_link_error"])
         except Exception as e:
             print(f"Error in getfile link: {e}")
             send_message(message.chat.id, lang_data["download_link_error"])
     else:
+        # Standard /start command
         users_collection.update_one({'_id': user_id}, {'$set': {'username': message.from_user.username, 'first_name': message.from_user.first_name}}, upsert=True)
         send_message(message.chat.id, lang_data["start_message"], reply_markup=main_keyboard(DEFAULT_LANGUAGE))
 
@@ -783,6 +803,46 @@ def upload_media_handler(message):
     download_link = f"https://t.me/{bot.get_me().username}?start=getfile_{global_file_id}_{token}"
     send_message(message.chat.id, lang_data["upload_success_message"].format(file_id=global_file_id, download_link=download_link), reply_markup=main_keyboard(get_user_lang_code(user_id)))
     delete_state(user_id)
+    
+@bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id).get("forward_button"))
+def forward_button_handler(message):
+    if not force_sub_check(message):
+        return
+    user_id = message.from_user.id
+    lang_data = get_user_lang(user_id)
+    send_message(message.chat.id, lang_data["forward_request_message"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
+    set_state(user_id, "awaiting_forward")
+
+@bot.message_handler(func=lambda message: get_state(message.from_user.id) == "awaiting_forward")
+def forwarded_message_receiver(message):
+    if not force_sub_check(message):
+        return
+    user_id = message.from_user.id
+    lang_data = get_user_lang(user_id)
+    
+    # Save the forwarded post to your storage channel
+    sent_message = bot.copy_message(STORAGE_GROUP_ID, message.chat.id, message.message_id)
+    
+    # Generate a unique ID and link for the post
+    global_file_id = get_next_sequence_value('global_file_id')
+    token = ''.join(random.choices(string.ascii_letters + string.digits, k=16))
+    
+    # Save post information to the database
+    file_doc = {
+        '_id': global_file_id,
+        'uploader_id': user_id,
+        'file_type': 'post',  # We use a new type 'post' to distinguish it from files
+        'message_id_in_storage': sent_message.message_id,
+        'token': token,
+        'created_at': datetime.now(timezone.utc)
+    }
+    files_collection.insert_one(file_doc)
+    
+    # Create the shareable link
+    share_link = f"https://t.me/{bot.get_me().username}?start=getfile_{global_file_id}_{token}"
+    
+    send_message(message.chat.id, lang_data["forward_success_message"].format(share_link=share_link), reply_markup=main_keyboard(get_user_lang_code(user_id)))
+    delete_state(user_id)
 
 @bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["caption_button"])
 def caption_button_handler(message):
@@ -884,12 +944,19 @@ def get_file_by_id_handler(message):
     file_id_to_get = message.text
     if not file_id_to_get.isdigit():
         send_message(message.chat.id, lang_data["delete_file_invalid_id"]); delete_state(user_id); return
+        
     file_doc = files_collection.find_one({'_id': int(file_id_to_get)})
     if file_doc:
-        send_file_by_id(user_id, file_doc["file_type"], file_doc["file_id"])
-        send_confirmation_disclaimer(user_id)
+        # Check if it's a 'post' or a media file
+        if file_doc.get('file_type') == 'post':
+            bot.copy_message(user_id, STORAGE_GROUP_ID, file_doc['message_id_in_storage'])
+            send_confirmation_disclaimer(user_id)
+        else: # It's a regular file
+            send_file_by_id(user_id, file_doc["file_type"], file_doc["file_id"])
+            send_confirmation_disclaimer(user_id)
     else:
         send_message(user_id, lang_data["file_not_found"])
+        
     delete_state(user_id)
     send_message(message.chat.id, lang_data["main_menu_back"], reply_markup=main_keyboard(get_user_lang_code(user_id)))
 
