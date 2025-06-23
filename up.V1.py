@@ -6,6 +6,7 @@ from telebot import types
 import hashlib
 import random
 import string
+from datetime import timezone
 from datetime import datetime
 import threading
 import time
@@ -644,7 +645,7 @@ def create_code_limit_handler(message):
     db_document = {
         '_id': new_code, 'item_type': 'code_pool' if is_pool else prize_data['type'],
         'item_content': prize_data, 'redemption_limit': int(message.text),
-        'redemption_count': 0, 'redeemed_by': [], 'creator_id': user_id, 'created_at': datetime.utcnow()
+        'redemption_count': 0, 'redeemed_by': [], 'creator_id': user_id, 'created_at': datetime.now(timezone.utc)
     }
     redeem_codes_collection.insert_one(db_document)
     success_message = lang_data["create_pool_success"] if is_pool else lang_data["create_code_success"]
@@ -776,7 +777,7 @@ def upload_media_handler(message):
     file_doc = {
         '_id': global_file_id, 'uploader_id': user_id, 'file_id': telegram_file_id,
         'file_type': media_type, 'message_id_in_storage': sent_message.message_id,
-        'token': token, 'created_at': datetime.utcnow()
+        'token': token, 'created_at': datetime.now(timezone.utc)
     }
     files_collection.insert_one(file_doc)
     download_link = f"https://t.me/{bot.get_me().username}?start=getfile_{global_file_id}_{token}"
