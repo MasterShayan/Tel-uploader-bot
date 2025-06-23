@@ -29,6 +29,7 @@ This project has been significantly upgraded to be a scalable and professional a
     * **Code Pools**: Create a single code that gives a different prize from a predefined list to each user who redeems it (perfect for giveaways).
     * **Admin Notifications**: Get real-time alerts when a user redeems a code you created.
 * **User-Centric Features**:
+    * **Personal File Listing**: Users can get a paginated list of all the files, posts, and batches they have personally shared using the `/myfiles` command.
     * **Custom Captions**: Set a persistent custom caption that gets automatically applied to all your future file uploads.
     * **File Management**: Users can delete any file or post they have personally shared.
     * **User Profile**: Check your user ID and the total number of files you've uploaded.
@@ -57,19 +58,20 @@ While most actions are handled by buttons, several slash commands are available 
 
 #### For All Users
 * `/start`: Starts the bot and shows the main menu. Can also be used with a link to get a file/post.
-* `/getfile`: Same as the "Get File by ID" button.
-* `/redeem`: Same as the "Redeem Code" button.
+* `/getfile`: Retrieve a file or post by its Global ID.
+* `/myfiles`: List all the files and posts you have shared.
+* `/redeem`: Redeem a gift code.
 
 #### For Admins Only
-* `/batch`: Starts the process to create a shareable link for a range of messages.
-* `/createcode`: Starts the process of creating a new redeem code.
-* `/createpool`: Starts the process of creating a new code pool for giveaways.
-* `/listadmins`: Shows a list of all current bot admins.
-* `/panel`: Shows the admin panel with management buttons.
+* `/batch`: Create a shareable link for a range of messages.
+* `/createcode`: Create a single-item giveaway code.
+* `/createpool`: Create a giveaway from a pool of codes.
+* `/listadmins`: List all current admins.
+* `/panel`: Access the admin panel.
 
 #### For the Bot Owner Only
-* `/addadmin <user_id>`: Promotes a user to an admin.
-* `/removeadmin <user_id>`: Removes an admin's privileges.
+* `/addadmin <user_id>`: Promote a user to an admin.
+* `/removeadmin <user_id>`: Remove an admin's privileges.
 * `/addforcesub <channel_id>`: Add a channel to the force subscription list.
 * `/removeforcesub <channel_id>`: Remove a channel from the force subscription list.
 * `/listforcesub`: List all force subscription channels.
@@ -104,15 +106,33 @@ You can run this bot on a cloud platform (like Heroku, Render, Railway) or on yo
     * Create a new app on Heroku and connect it to your forked GitHub repository.
     * Go to the app's `Settings` -> `Config Vars` and add the following environment variables:
 
-| Key                | Value                                                                   |
-| :----------------- | :---------------------------------------------------------------------- |
-| `MONGODB_URI`      | Your full MongoDB connection string from Step 3.                        |
-| `BOT_TOKEN`        | Your Telegram bot token.                                                |
+| Key                | Value                                                                    |
+| :----------------- | :----------------------------------------------------------------------- |
+| `MONGODB_URI`      | Your full MongoDB connection string from Step 3.                         |
+| `BOT_TOKEN`        | Your Telegram bot token.                                                 |
 | `ADMIN_IDS`        | A comma-separated list of admin User IDs. **The first ID is the Owner.** |
-| `STORAGE_GROUP_ID` | The ID of your private Telegram storage channel/group.                  |
+| `STORAGE_GROUP_ID` | The ID of your private Telegram storage channel/group.                   |
 
 5.  **Activate the Bot:** In your Heroku app's "Resources" tab, ensure the `worker` dyno is switched ON.
-6.  **Set Bot Commands:** In `@BotFather`, use the `/setcommands` command to add the list from the "Bot Commands" section above for easy access in the Telegram UI.
+6.  **Set Bot Commands:** In `@BotFather`, use the `/setcommands` command for your bot. When prompted, copy and paste the entire block of text below:
+    ```
+    start - Start the bot and show the main menu.
+    getfile - Retrieve a file or post by its Global ID.
+    myfiles - List all the files and posts you have shared.
+    redeem - Redeem a gift code.
+    batch - Create a share link for a range of messages (Admins only).
+    createcode - Create a single-item giveaway code (Admins only).
+    createpool - Create a giveaway from a pool of codes (Admins only).
+    listadmins - List all current admins (Admins only).
+    panel - Access the admin panel (Admins only).
+    addadmin - Add a new admin (Owner only).
+    removeadmin - Remove an admin (Owner only).
+    addforcesub - Add a channel to the force subscription list (Owner only).
+    removeforcesub - Remove a channel from the force subscription list (Owner only).
+    listforcesub - List all force subscription channels (Owner only).
+    set_delete_timer - Set the file self-destruct timer (Owner only).
+    check_delete_timer - Check the current auto-delete timer (Owner only).
+    ```
 
 ---
 
