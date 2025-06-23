@@ -96,4 +96,10 @@
     "force_sub_add_prompt": "Send channel ID to add (bot must be admin in channel):",
     "force_sub_remove_prompt": "Send channel ID to remove:",
     "force_sub_channel_entry": "- {title} (ID: `{id}`)\n  Join: {invite_link}"
+    "my_files_header": "🗂️ Here is a list of your uploaded files and posts:",
+    "my_files_entry": "\n\n- ID: `{file_id}` ({file_type})",
+    "my_files_no_files": "You have not uploaded any files or posts yet.",
+    "my_files_page_info": "\n\nPage {current_page} of {total_pages}",
+    "my_files_prev_button": "⬅️ Previous",
+    "my_files_next_button": "➡️ Next"
 }
