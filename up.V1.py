@@ -321,7 +321,18 @@ def main_keyboard(lang_code):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     btn1, btn2, btn3 = types.KeyboardButton(lang_data["upload_button"]), types.KeyboardButton(lang_data["delete_button"]), types.KeyboardButton(lang_data["get_file_button"])
     btn4, btn5, btn6, btn7 = types.KeyboardButton(lang_data["redeem_button"]), types.KeyboardButton(lang_data["caption_button"]), types.KeyboardButton(lang_data["support_button"]), types.KeyboardButton(lang_data["profile_button"])
-    markup.add(btn1); markup.add(btn2, btn3); markup.add(btn4, btn5); markup.add(btn6, btn7)
+    
+    # This is the new button for the forwarding feature
+    btn8 = types.KeyboardButton(lang_data["forward_button"])
+    
+    # This line is updated to include the new button on the first row
+    markup.add(btn1, btn8)
+    
+    # These lines remain the same
+    markup.add(btn2, btn3)
+    markup.add(btn4, btn5)
+    markup.add(btn6, btn7)
+    
     return markup
 
 def admin_keyboard(lang_code):
@@ -345,19 +356,34 @@ def start_command_handler(message):
         return
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
+    
     if len(message.text.split()) > 1 and message.text.split()[1].startswith('getfile_'):
         try:
-            file_info = message.text.split()[1].replace('getfile_', '')
+            file_info = message.text.split(' ')[1].replace('getfile_', '')
             global_file_id, token = file_info.split('_')
             file_doc = files_collection.find_one({'_id': int(global_file_id)})
-            if file_doc and file_doc["token"] == token:
-                send_file_by_id(message.chat.id, file_doc["file_type"], file_doc["file_id"])
-                send_confirmation_disclaimer(message.chat.id)
+            
+            if file_doc and file_doc.get("token") == token:
+                file_type = file_doc.get('file_type')
+                
+                if file_type == 'batch':
+                    start_id = file_doc['start_message_id']
+                    end_id = file_doc['end_message_id']
+                    for msg_id in range(start_id, end_id + 1):
+                        bot.copy_message(user_id, STORAGE_GROUP_ID, msg_id)
+                        time.sleep(0.3) # To avoid Telegram's rate limits
+                    send_message(user_id, "✅ Batch delivery complete!")
+                elif file_type == 'post':
+                    bot.copy_message(user_id, STORAGE_GROUP_ID, file_doc['message_id_in_storage'])
+                    send_confirmation_disclaimer(user_id)
+                else: # It's a regular file
+                    send_file_by_id(user_id, file_doc["file_type"], file_doc["file_id"])
+                    send_confirmation_disclaimer(user_id)
             else:
-                send_message(message.chat.id, lang_data["download_link_error"])
+                send_message(user_id, lang_data["download_link_error"])
         except Exception as e:
             print(f"Error in getfile link: {e}")
-            send_message(message.chat.id, lang_data["download_link_error"])
+            send_message(user_id, lang_data["download_link_error"])
     else:
         users_collection.update_one({'_id': user_id}, {'$set': {'username': message.from_user.username, 'first_name': message.from_user.first_name}}, upsert=True)
         send_message(message.chat.id, lang_data["start_message"], reply_markup=main_keyboard(DEFAULT_LANGUAGE))
@@ -465,6 +491,75 @@ def admin_broadcast_receiver(message):
     report = lang_data["admin_broadcast_report"].format(success_count=success_count, fail_count=fail_count)
     send_message(message.chat.id, report, reply_markup=main_keyboard(get_user_lang_code(message.from_user.id)))
     delete_state(message.from_user.id)
+
+@bot.message_handler(commands=['batch'])
+def batch_command_handler(message):
+    """Starts the batch creation process. Admin only."""
+    if not is_admin(message.from_user.id):
+        send_message(message.chat.id, get_user_lang(message.from_user.id)["admin_panel_access_denied"])
+        return
+
+    lang_data = get_user_lang(message.from_user.id)
+    send_message(message.chat.id, lang_data["batch_command_prompt_first"], reply_markup=back_keyboard(get_user_lang_code(message.from_user.id)))
+    set_state(message.from_user.id, "batch_awaiting_first")
+
+@bot.message_handler(
+    content_types=['text', 'photo', 'video', 'document', 'audio', 'sticker', 'voice', 'video_note'],
+    func=lambda message: get_state(message.from_user.id) == "batch_awaiting_first"
+)
+def batch_first_message_handler(message):
+    """Handles the first forwarded message for the batch."""
+    user_id = message.from_user.id
+    lang_data = get_user_lang(user_id)
+
+    if not (message.forward_from_chat and message.forward_from_chat.id == STORAGE_GROUP_ID):
+        send_message(user_id, lang_data["batch_error_not_forward"])
+        delete_state(user_id)
+        return
+
+    first_message_id = message.forward_from_message_id
+    send_message(user_id, lang_data["batch_command_prompt_last"])
+    set_state(user_id, "batch_awaiting_last", data={'first_message_id': first_message_id})
+
+@bot.message_handler(
+    content_types=['text', 'photo', 'video', 'document', 'audio', 'sticker', 'voice', 'video_note'],
+    func=lambda message: get_state(message.from_user.id) == "batch_awaiting_last"
+)
+def batch_last_message_handler(message):
+    """Handles the last forwarded message and creates the batch link."""
+    user_id = message.from_user.id
+    lang_data = get_user_lang(user_id)
+
+    if not (message.forward_from_chat and message.forward_from_chat.id == STORAGE_GROUP_ID):
+        send_message(user_id, lang_data["batch_error_not_forward"])
+        delete_state(user_id)
+        return
+
+    last_message_id = message.forward_from_message_id
+    state_data = get_state_data(user_id)
+    first_message_id = state_data.get('first_message_id')
+
+    # Generate a unique ID and link for the batch
+    global_file_id = get_next_sequence_value('global_file_id')
+    token = ''.join(random.choices(string.ascii_letters + string.digits, k=16))
+
+    # Save batch information to the database
+    file_doc = {
+        '_id': global_file_id,
+        'uploader_id': user_id,
+        'file_type': 'batch',  # A new type to identify a range of messages
+        'start_message_id': first_message_id,
+        'end_message_id': last_message_id,
+        'token': token,
+        'created_at': datetime.now(timezone.utc)
+    }
+    files_collection.insert_one(file_doc)
+    
+    # Create the shareable link (uses the same format for simplicity)
+    share_link = f"https://t.me/{bot.get_me().username}?start=getfile_{global_file_id}_{token}"
+    
+    send_message(message.chat.id, lang_data["batch_success"].format(share_link=share_link), reply_markup=main_keyboard(get_user_lang_code(user_id)))
+    delete_state(user_id)
 
 @bot.message_handler(func=lambda message: is_admin(message.from_user.id) and message.text == get_user_lang(message.from_user.id)["admin_forward_broadcast_button"])
 def admin_forward_broadcast_handler(message):
@@ -783,6 +878,49 @@ def upload_media_handler(message):
     download_link = f"https://t.me/{bot.get_me().username}?start=getfile_{global_file_id}_{token}"
     send_message(message.chat.id, lang_data["upload_success_message"].format(file_id=global_file_id, download_link=download_link), reply_markup=main_keyboard(get_user_lang_code(user_id)))
     delete_state(user_id)
+    
+@bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id).get("forward_button"))
+def forward_button_handler(message):
+    if not force_sub_check(message):
+        return
+    user_id = message.from_user.id
+    lang_data = get_user_lang(user_id)
+    send_message(message.chat.id, lang_data["forward_request_message"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
+    set_state(user_id, "awaiting_forward")
+
+@bot.message_handler(
+    content_types=['text', 'photo', 'video', 'document', 'audio', 'sticker', 'voice', 'video_note', 'location', 'contact'],
+    func=lambda message: get_state(message.from_user.id) == "awaiting_forward"
+)
+def forwarded_message_receiver(message):
+    if not force_sub_check(message):
+        return
+    user_id = message.from_user.id
+    lang_data = get_user_lang(user_id)
+    
+    # Save the forwarded post to your storage channel
+    sent_message = bot.copy_message(STORAGE_GROUP_ID, message.chat.id, message.message_id)
+    
+    # Generate a unique ID and link for the post
+    global_file_id = get_next_sequence_value('global_file_id')
+    token = ''.join(random.choices(string.ascii_letters + string.digits, k=16))
+    
+    # Save post information to the database
+    file_doc = {
+        '_id': global_file_id,
+        'uploader_id': user_id,
+        'file_type': 'post',  # We use a new type 'post' to distinguish it from files
+        'message_id_in_storage': sent_message.message_id,
+        'token': token,
+        'created_at': datetime.now(timezone.utc)
+    }
+    files_collection.insert_one(file_doc)
+    
+    # Create the shareable link
+    share_link = f"https://t.me/{bot.get_me().username}?start=getfile_{global_file_id}_{token}"
+    
+    send_message(message.chat.id, lang_data["forward_success_message"].format(share_link=share_link), reply_markup=main_keyboard(get_user_lang_code(user_id)))
+    delete_state(user_id)
 
 @bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["caption_button"])
 def caption_button_handler(message):
@@ -849,10 +987,79 @@ def support_handler(message):
         return
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
-    support_message = lang_data["support_message_prefix"].format(first_name=message.from_user.first_name, user_id=user_id) + message.text
-    send_message(OWNER_ID, support_message)
+    
+    # Prepare the message for the owner
+    support_message = lang_data["support_message_prefix"].format(
+        first_name=message.from_user.first_name, 
+        user_id=user_id
+    ) + message.text
+    
+    # Create the inline "Reply" button
+    markup = types.InlineKeyboardMarkup()
+    reply_button = types.InlineKeyboardButton(
+        text=lang_data["support_answer_button"],
+        callback_data=f"reply_to_{user_id}"
+    )
+    markup.add(reply_button)
+    
+    # Send the message to the owner WITH the button
+    send_message(OWNER_ID, support_message, reply_markup=markup)
+    
+    # Send confirmation to the user
     send_message(message.chat.id, lang_data["support_message_sent"], reply_markup=main_keyboard(get_user_lang_code(user_id)))
     delete_state(user_id)
+    
+@bot.callback_query_handler(func=lambda call: call.data.startswith('reply_to_'))
+def handle_reply_button_click(call):
+    """
+    Handles the owner clicking the 'Reply' button on a support message.
+    """
+    owner_id = call.from_user.id
+    try:
+        # Extract the original user's ID from the callback data
+        target_user_id = int(call.data.split('_')[2])
+    except (IndexError, ValueError):
+        bot.answer_callback_query(call.id, "Error: Invalid user ID in callback.")
+        return
+
+    lang_data = get_user_lang(owner_id)
+    prompt_message = lang_data["support_answer_request"].format(user_id=target_user_id)
+    
+    # Ask the owner to type their reply
+    send_message(owner_id, prompt_message, reply_markup=back_keyboard(get_user_lang_code(owner_id)))
+    
+    # Set the owner's state to wait for the reply message
+    set_state(owner_id, "owner_replying", data={'target_user_id': target_user_id})
+    bot.answer_callback_query(call.id) # Acknowledge the button press
+
+@bot.message_handler(func=lambda message: get_state(message.from_user.id) == "owner_replying")
+def handle_owner_reply(message):
+    """
+    Handles the message sent by the owner as a reply.
+    """
+    owner_id = message.from_user.id
+    state_data = get_state_data(owner_id)
+    target_user_id = state_data.get('target_user_id')
+
+    if not target_user_id:
+        # Should not happen, but as a safeguard
+        delete_state(owner_id)
+        return
+
+    lang_data = get_user_lang(owner_id) # Lang data for admin's confirmation
+    user_lang_data = get_user_lang(target_user_id) # Lang data for the user's message
+    
+    # Prepare the message for the user
+    reply_text = user_lang_data["support_answer_admin_prefix"] + message.text
+    
+    # Send the reply to the original user
+    send_message(target_user_id, reply_text)
+    
+    # Confirm to the owner that the reply was sent
+    send_message(owner_id, lang_data["support_answer_sent_admin"], reply_markup=main_keyboard(get_user_lang_code(owner_id)))
+    
+    # Clean up the owner's state
+    delete_state(owner_id)
 
 @bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["profile_button"])
 def profile_button_handler(message):
@@ -884,12 +1091,27 @@ def get_file_by_id_handler(message):
     file_id_to_get = message.text
     if not file_id_to_get.isdigit():
         send_message(message.chat.id, lang_data["delete_file_invalid_id"]); delete_state(user_id); return
+        
     file_doc = files_collection.find_one({'_id': int(file_id_to_get)})
     if file_doc:
-        send_file_by_id(user_id, file_doc["file_type"], file_doc["file_id"])
-        send_confirmation_disclaimer(user_id)
+        file_type = file_doc.get('file_type')
+
+        if file_type == 'batch':
+            start_id = file_doc['start_message_id']
+            end_id = file_doc['end_message_id']
+            for msg_id in range(start_id, end_id + 1):
+                bot.copy_message(user_id, STORAGE_GROUP_ID, msg_id)
+                time.sleep(0.3) # To avoid Telegram's rate limits
+            send_message(user_id, "✅ Batch delivery complete!")
+        elif file_type == 'post':
+            bot.copy_message(user_id, STORAGE_GROUP_ID, file_doc['message_id_in_storage'])
+            send_confirmation_disclaimer(user_id)
+        else: # It's a regular file
+            send_file_by_id(user_id, file_doc["file_type"], file_doc["file_id"])
+            send_confirmation_disclaimer(user_id)
     else:
         send_message(user_id, lang_data["file_not_found"])
+        
     delete_state(user_id)
     send_message(message.chat.id, lang_data["main_menu_back"], reply_markup=main_keyboard(get_user_lang_code(user_id)))
 
