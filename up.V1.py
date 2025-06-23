@@ -1140,6 +1140,79 @@ def redeem_button_handler(message):
         return
     redeem_command_handler(message)
 
+def send_my_files_page(chat_id, user_id, page=1, message_id=None):
+    """
+    Helper function to build and send a paginated list of a user's files.
+    Can either send a new message or edit an existing one.
+    """
+    lang_data = get_user_lang(user_id)
+    items_per_page = 10  # Show 10 items per page
+
+    # Query the database for the user's files with pagination
+    user_files_query = {'uploader_id': user_id}
+    total_files = files_collection.count_documents(user_files_query)
+
+    if total_files == 0:
+        send_message(chat_id, lang_data["my_files_no_files"])
+        return
+
+    # Calculate total pages
+    total_pages = (total_files + items_per_page - 1) // items_per_page
+    
+    # Get the files for the current page, sorted by most recent first
+    files_cursor = files_collection.find(user_files_query).sort('_id', pymongo.DESCENDING).skip((page - 1) * items_per_page).limit(items_per_page)
+    
+    # Build the message text
+    message_text = lang_data["my_files_header"]
+    for file_doc in files_cursor:
+        file_type = file_doc.get("file_type", "file").capitalize()
+        message_text += lang_data["my_files_entry"].format(file_id=file_doc['_id'], file_type=file_type)
+    
+    message_text += lang_data["my_files_page_info"].format(current_page=page, total_pages=total_pages)
+
+    # Build the navigation buttons
+    markup = types.InlineKeyboardMarkup()
+    button_row = []
+    if page > 1:
+        prev_button = types.InlineKeyboardButton(lang_data["my_files_prev_button"], callback_data=f"myfiles_page_{page - 1}")
+        button_row.append(prev_button)
+    if page < total_pages:
+        next_button = types.InlineKeyboardButton(lang_data["my_files_next_button"], callback_data=f"myfiles_page_{page + 1}")
+        button_row.append(next_button)
+    
+    if button_row:
+        markup.add(*button_row)
+
+    # If message_id is provided, edit the existing message. Otherwise, send a new one.
+    try:
+        if message_id:
+            bot.edit_message_text(message_text, chat_id, message_id, reply_markup=markup, parse_mode="Markdown")
+        else:
+            bot.send_message(chat_id, message_text, reply_markup=markup, parse_mode="Markdown")
+    except Exception as e:
+        # This can happen if the message content hasn't changed, which is fine.
+        print(f"Error sending or editing myfiles page: {e}")
+
+
+@bot.message_handler(commands=['myfiles'])
+def my_files_handler(message):
+    """Handles the /myfiles command to show the first page of files."""
+    if not force_sub_check(message):
+        return
+    send_my_files_page(message.chat.id, message.from_user.id, page=1)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('myfiles_page_'))
+def my_files_callback_handler(call):
+    """Handles the pagination button clicks for the myfiles list."""
+    try:
+        page = int(call.data.split('_')[2])
+        send_my_files_page(call.message.chat.id, call.from_user.id, page=page, message_id=call.message.message_id)
+        bot.answer_callback_query(call.id)
+    except Exception as e:
+        bot.answer_callback_query(call.id, text="Error loading page.")
+        print(f"Error in my_files_callback_handler: {e}")
+
 # --- Main ---
 if __name__ == "__main__":
     counters_collection.update_one({'_id': 'global_file_id'}, {'$setOnInsert': {'sequence_value': 0}}, upsert=True)
