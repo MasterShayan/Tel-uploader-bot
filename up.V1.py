@@ -960,16 +960,22 @@ def delete_file_handler(message):
     file_id_to_delete = message.text
     if not file_id_to_delete.isdigit():
         send_message(message.chat.id, lang_data["delete_file_invalid_id"], reply_markup=back_keyboard(get_user_lang_code(user_id))); return
+        
     file_doc = files_collection.find_one({'_id': int(file_id_to_delete)})
     if file_doc and (file_doc['uploader_id'] == user_id or is_admin(user_id)):
+        # If it's a batch, just delete the record. Otherwise, try to delete the stored message too.
+        if file_doc.get('file_type') != 'batch':
+            try:
+                bot.delete_message(STORAGE_GROUP_ID, file_doc['message_id_in_storage'])
+            except Exception as e:
+                print(f"Could not delete message from storage group: {e}")
+
+        # Delete the record from the database for all types
         files_collection.delete_one({'_id': int(file_id_to_delete)})
-        try:
-            bot.delete_message(STORAGE_GROUP_ID, file_doc['message_id_in_storage'])
-        except Exception as e:
-            print(f"Could not delete message from storage group: {e}")
         send_message(message.chat.id, lang_data["delete_file_success"].format(file_id=file_id_to_delete), reply_markup=main_keyboard(get_user_lang_code(user_id)))
     else:
         send_message(message.chat.id, lang_data["file_not_found"], reply_markup=main_keyboard(get_user_lang_code(user_id)))
+        
     delete_state(user_id)
 
 @bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["support_button"])
@@ -1008,7 +1014,7 @@ def support_handler(message):
     # Send confirmation to the user
     send_message(message.chat.id, lang_data["support_message_sent"], reply_markup=main_keyboard(get_user_lang_code(user_id)))
     delete_state(user_id)
-    
+ 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('reply_to_'))
 def handle_reply_button_click(call):
     """
@@ -1026,7 +1032,12 @@ def handle_reply_button_click(call):
     prompt_message = lang_data["support_answer_request"].format(user_id=target_user_id)
     
     # Ask the owner to type their reply
-    send_message(owner_id, prompt_message, reply_markup=back_keyboard(get_user_lang_code(owner_id)))
+    send_message(
+        owner_id, 
+        prompt_message, 
+        reply_markup=back_keyboard(get_user_lang_code(owner_id)),
+        parse_mode=None  # FIX: Send this prompt as plain text to avoid formatting errors
+    )
     
     # Set the owner's state to wait for the reply message
     set_state(owner_id, "owner_replying", data={'target_user_id': target_user_id})
