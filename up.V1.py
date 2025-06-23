@@ -912,10 +912,79 @@ def support_handler(message):
         return
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
-    support_message = lang_data["support_message_prefix"].format(first_name=message.from_user.first_name, user_id=user_id) + message.text
-    send_message(OWNER_ID, support_message)
+    
+    # Prepare the message for the owner
+    support_message = lang_data["support_message_prefix"].format(
+        first_name=message.from_user.first_name, 
+        user_id=user_id
+    ) + message.text
+    
+    # Create the inline "Reply" button
+    markup = types.InlineKeyboardMarkup()
+    reply_button = types.InlineKeyboardButton(
+        text=lang_data["support_answer_button"],
+        callback_data=f"reply_to_{user_id}"
+    )
+    markup.add(reply_button)
+    
+    # Send the message to the owner WITH the button
+    send_message(OWNER_ID, support_message, reply_markup=markup)
+    
+    # Send confirmation to the user
     send_message(message.chat.id, lang_data["support_message_sent"], reply_markup=main_keyboard(get_user_lang_code(user_id)))
     delete_state(user_id)
+    
+@bot.callback_query_handler(func=lambda call: call.data.startswith('reply_to_'))
+def handle_reply_button_click(call):
+    """
+    Handles the owner clicking the 'Reply' button on a support message.
+    """
+    owner_id = call.from_user.id
+    try:
+        # Extract the original user's ID from the callback data
+        target_user_id = int(call.data.split('_')[2])
+    except (IndexError, ValueError):
+        bot.answer_callback_query(call.id, "Error: Invalid user ID in callback.")
+        return
+
+    lang_data = get_user_lang(owner_id)
+    prompt_message = lang_data["support_answer_request"].format(user_id=target_user_id)
+    
+    # Ask the owner to type their reply
+    send_message(owner_id, prompt_message, reply_markup=back_keyboard(get_user_lang_code(owner_id)))
+    
+    # Set the owner's state to wait for the reply message
+    set_state(owner_id, "owner_replying", data={'target_user_id': target_user_id})
+    bot.answer_callback_query(call.id) # Acknowledge the button press
+
+@bot.message_handler(func=lambda message: get_state(message.from_user.id) == "owner_replying")
+def handle_owner_reply(message):
+    """
+    Handles the message sent by the owner as a reply.
+    """
+    owner_id = message.from_user.id
+    state_data = get_state_data(owner_id)
+    target_user_id = state_data.get('target_user_id')
+
+    if not target_user_id:
+        # Should not happen, but as a safeguard
+        delete_state(owner_id)
+        return
+
+    lang_data = get_user_lang(owner_id) # Lang data for admin's confirmation
+    user_lang_data = get_user_lang(target_user_id) # Lang data for the user's message
+    
+    # Prepare the message for the user
+    reply_text = user_lang_data["support_answer_admin_prefix"] + message.text
+    
+    # Send the reply to the original user
+    send_message(target_user_id, reply_text)
+    
+    # Confirm to the owner that the reply was sent
+    send_message(owner_id, lang_data["support_answer_sent_admin"], reply_markup=main_keyboard(get_user_lang_code(owner_id)))
+    
+    # Clean up the owner's state
+    delete_state(owner_id)
 
 @bot.message_handler(func=lambda message: message.text == get_user_lang(message.from_user.id)["profile_button"])
 def profile_button_handler(message):
