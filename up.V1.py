@@ -371,7 +371,7 @@ def panel_command_handler(message):
     else:
         send_message(message.chat.id, get_user_lang(message.from_user.id)["admin_panel_access_denied"])
         
-# --- Admin Panel Button Handlers ---
+# --- Admin Panel Button Handlers (Corrected Version) ---
 
 @bot.message_handler(func=lambda message: is_admin(message.from_user.id) and message.text == get_user_lang(message.from_user.id)["admin_stats_button"])
 def admin_stats_handler(message):
@@ -400,11 +400,12 @@ def admin_ban_handler(message):
     send_message(message.chat.id, lang_data["admin_ban_request"], reply_markup=back_keyboard(get_user_lang_code(message.from_user.id)))
     set_state(message.from_user.id, "awaiting_ban_id")
 
-@bot.message_handler(func=lambda message: get_state(message.from_user.id) == "awaiting_ban_id")
+@bot.message_handler(func=lambda message: is_admin(message.from_user.id) and get_state(message.from_user.id) == "awaiting_ban_id")
 def admin_ban_id_receiver(message):
     lang_data = get_user_lang(message.from_user.id)
     if not message.text.isdigit():
         send_message(message.chat.id, lang_data["admin_invalid_user_id"])
+        delete_state(message.from_user.id) # FIX: Clear state on error
         return
         
     user_to_ban = int(message.text)
@@ -423,11 +424,12 @@ def admin_unban_handler(message):
     send_message(message.chat.id, lang_data["admin_unban_request"], reply_markup=back_keyboard(get_user_lang_code(message.from_user.id)))
     set_state(message.from_user.id, "awaiting_unban_id")
 
-@bot.message_handler(func=lambda message: get_state(message.from_user.id) == "awaiting_unban_id")
+@bot.message_handler(func=lambda message: is_admin(message.from_user.id) and get_state(message.from_user.id) == "awaiting_unban_id")
 def admin_unban_id_receiver(message):
     lang_data = get_user_lang(message.from_user.id)
     if not message.text.isdigit():
         send_message(message.chat.id, lang_data["admin_invalid_user_id"])
+        delete_state(message.from_user.id) # FIX: Clear state on error
         return
         
     user_to_unban = int(message.text)
@@ -444,7 +446,7 @@ def admin_broadcast_handler(message):
     send_message(message.chat.id, lang_data["admin_broadcast_request"], reply_markup=back_keyboard(get_user_lang_code(message.from_user.id)))
     set_state(message.from_user.id, "awaiting_broadcast")
 
-@bot.message_handler(content_types=['text'], func=lambda message: get_state(message.from_user.id) == "awaiting_broadcast")
+@bot.message_handler(content_types=['text'], func=lambda message: is_admin(message.from_user.id) and get_state(message.from_user.id) == "awaiting_broadcast")
 def admin_broadcast_receiver(message):
     lang_data = get_user_lang(message.from_user.id)
     all_users = users_collection.find({}, {'_id': 1})
@@ -457,7 +459,7 @@ def admin_broadcast_receiver(message):
             success_count += 1
         else:
             fail_count += 1
-        time.sleep(0.1) # Avoid rate limiting
+        time.sleep(0.1) 
         
     report = lang_data["admin_broadcast_report"].format(success_count=success_count, fail_count=fail_count)
     send_message(message.chat.id, report, reply_markup=main_keyboard(get_user_lang_code(message.from_user.id)))
@@ -469,7 +471,7 @@ def admin_forward_broadcast_handler(message):
     send_message(message.chat.id, lang_data["admin_forward_broadcast_request"], reply_markup=back_keyboard(get_user_lang_code(message.from_user.id)))
     set_state(message.from_user.id, "awaiting_forward_broadcast")
 
-@bot.message_handler(content_types=['text', 'photo', 'video', 'document', 'audio'], func=lambda message: get_state(message.from_user.id) == "awaiting_forward_broadcast")
+@bot.message_handler(content_types=['text', 'photo', 'video', 'document', 'audio'], func=lambda message: is_admin(message.from_user.id) and get_state(message.from_user.id) == "awaiting_forward_broadcast")
 def admin_forward_broadcast_receiver(message):
     lang_data = get_user_lang(message.from_user.id)
     all_users = users_collection.find({}, {'_id': 1})
@@ -482,7 +484,7 @@ def admin_forward_broadcast_receiver(message):
             success_count += 1
         except Exception:
             fail_count += 1
-        time.sleep(0.1) # Avoid rate limiting
+        time.sleep(0.1)
 
     report = lang_data["admin_forward_broadcast_report"].format(success_count=success_count, fail_count=fail_count)
     send_message(message.chat.id, report, reply_markup=main_keyboard(get_user_lang_code(message.from_user.id)))
