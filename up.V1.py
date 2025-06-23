@@ -370,6 +370,125 @@ def panel_command_handler(message):
         send_message(message.chat.id, lang_data["admin_panel_welcome"], reply_markup=admin_keyboard(get_user_lang_code(message.from_user.id)))
     else:
         send_message(message.chat.id, get_user_lang(message.from_user.id)["admin_panel_access_denied"])
+        
+# --- Admin Panel Button Handlers (Corrected Version) ---
+
+@bot.message_handler(func=lambda message: is_admin(message.from_user.id) and message.text == get_user_lang(message.from_user.id)["admin_stats_button"])
+def admin_stats_handler(message):
+    lang_data = get_user_lang(message.from_user.id)
+    user_count = users_collection.count_documents({})
+    config = admin_collection.find_one({'_id': 'bot_config'}) or {}
+    bot_status = lang_data["bot_status_on"] if config.get('bot_on', True) else lang_data["bot_status_off"]
+    
+    stats_text = lang_data["admin_stats_message"].format(user_count=user_count, bot_status=bot_status)
+    send_message(message.chat.id, stats_text)
+
+@bot.message_handler(func=lambda message: is_admin(message.from_user.id) and message.text == get_user_lang(message.from_user.id)["admin_bot_status_button"])
+def admin_toggle_bot_status_handler(message):
+    lang_data = get_user_lang(message.from_user.id)
+    config = admin_collection.find_one({'_id': 'bot_config'}) or {}
+    new_status = not config.get('bot_on', True)
+    admin_collection.update_one({'_id': 'bot_config'}, {'$set': {'bot_on': new_status}}, upsert=True)
+    
+    status_text = lang_data["bot_status_on"] if new_status else lang_data["bot_status_off"]
+    response_text = lang_data["admin_bot_status_changed"].format(bot_status=status_text)
+    send_message(message.chat.id, response_text)
+
+@bot.message_handler(func=lambda message: is_admin(message.from_user.id) and message.text == get_user_lang(message.from_user.id)["admin_ban_button"])
+def admin_ban_handler(message):
+    lang_data = get_user_lang(message.from_user.id)
+    send_message(message.chat.id, lang_data["admin_ban_request"], reply_markup=back_keyboard(get_user_lang_code(message.from_user.id)))
+    set_state(message.from_user.id, "awaiting_ban_id")
+
+@bot.message_handler(func=lambda message: is_admin(message.from_user.id) and get_state(message.from_user.id) == "awaiting_ban_id")
+def admin_ban_id_receiver(message):
+    lang_data = get_user_lang(message.from_user.id)
+    if not message.text.isdigit():
+        send_message(message.chat.id, lang_data["admin_invalid_user_id"])
+        delete_state(message.from_user.id) # FIX: Clear state on error
+        return
+        
+    user_to_ban = int(message.text)
+    if user_to_ban == OWNER_ID or is_admin(user_to_ban):
+        send_message(message.chat.id, "❌ You cannot ban an admin or the owner.")
+        delete_state(message.from_user.id)
+        return
+
+    users_collection.update_one({'_id': user_to_ban}, {'$set': {'banned': True}}, upsert=True)
+    send_message(message.chat.id, lang_data["admin_ban_success"].format(user_id=user_to_ban), reply_markup=main_keyboard(get_user_lang_code(message.from_user.id)))
+    delete_state(message.from_user.id)
+
+@bot.message_handler(func=lambda message: is_admin(message.from_user.id) and message.text == get_user_lang(message.from_user.id)["admin_unban_button"])
+def admin_unban_handler(message):
+    lang_data = get_user_lang(message.from_user.id)
+    send_message(message.chat.id, lang_data["admin_unban_request"], reply_markup=back_keyboard(get_user_lang_code(message.from_user.id)))
+    set_state(message.from_user.id, "awaiting_unban_id")
+
+@bot.message_handler(func=lambda message: is_admin(message.from_user.id) and get_state(message.from_user.id) == "awaiting_unban_id")
+def admin_unban_id_receiver(message):
+    lang_data = get_user_lang(message.from_user.id)
+    if not message.text.isdigit():
+        send_message(message.chat.id, lang_data["admin_invalid_user_id"])
+        delete_state(message.from_user.id) # FIX: Clear state on error
+        return
+        
+    user_to_unban = int(message.text)
+    result = users_collection.update_one({'_id': user_to_unban}, {'$set': {'banned': False}})
+    if result.matched_count > 0:
+        send_message(message.chat.id, lang_data["admin_unban_success"].format(user_id=user_to_unban), reply_markup=main_keyboard(get_user_lang_code(message.from_user.id)))
+    else:
+        send_message(message.chat.id, lang_data["admin_user_not_banned"], reply_markup=main_keyboard(get_user_lang_code(message.from_user.id)))
+    delete_state(message.from_user.id)
+
+@bot.message_handler(func=lambda message: is_admin(message.from_user.id) and message.text == get_user_lang(message.from_user.id)["admin_broadcast_button"])
+def admin_broadcast_handler(message):
+    lang_data = get_user_lang(message.from_user.id)
+    send_message(message.chat.id, lang_data["admin_broadcast_request"], reply_markup=back_keyboard(get_user_lang_code(message.from_user.id)))
+    set_state(message.from_user.id, "awaiting_broadcast")
+
+@bot.message_handler(content_types=['text'], func=lambda message: is_admin(message.from_user.id) and get_state(message.from_user.id) == "awaiting_broadcast")
+def admin_broadcast_receiver(message):
+    lang_data = get_user_lang(message.from_user.id)
+    all_users = users_collection.find({}, {'_id': 1})
+    success_count = 0
+    fail_count = 0
+    
+    for user in all_users:
+        sent = send_message(user['_id'], message.text)
+        if sent:
+            success_count += 1
+        else:
+            fail_count += 1
+        time.sleep(0.1) 
+        
+    report = lang_data["admin_broadcast_report"].format(success_count=success_count, fail_count=fail_count)
+    send_message(message.chat.id, report, reply_markup=main_keyboard(get_user_lang_code(message.from_user.id)))
+    delete_state(message.from_user.id)
+
+@bot.message_handler(func=lambda message: is_admin(message.from_user.id) and message.text == get_user_lang(message.from_user.id)["admin_forward_broadcast_button"])
+def admin_forward_broadcast_handler(message):
+    lang_data = get_user_lang(message.from_user.id)
+    send_message(message.chat.id, lang_data["admin_forward_broadcast_request"], reply_markup=back_keyboard(get_user_lang_code(message.from_user.id)))
+    set_state(message.from_user.id, "awaiting_forward_broadcast")
+
+@bot.message_handler(content_types=['text', 'photo', 'video', 'document', 'audio'], func=lambda message: is_admin(message.from_user.id) and get_state(message.from_user.id) == "awaiting_forward_broadcast")
+def admin_forward_broadcast_receiver(message):
+    lang_data = get_user_lang(message.from_user.id)
+    all_users = users_collection.find({}, {'_id': 1})
+    success_count = 0
+    fail_count = 0
+    
+    for user in all_users:
+        try:
+            bot.forward_message(user['_id'], message.chat.id, message.message_id)
+            success_count += 1
+        except Exception:
+            fail_count += 1
+        time.sleep(0.1)
+
+    report = lang_data["admin_forward_broadcast_report"].format(success_count=success_count, fail_count=fail_count)
+    send_message(message.chat.id, report, reply_markup=main_keyboard(get_user_lang_code(message.from_user.id)))
+    delete_state(message.from_user.id)
 
 @bot.message_handler(commands=['getfile'])
 def getfile_command_handler(message):
