@@ -5,16 +5,17 @@
 [![Telegram](https://img.shields.io/badge/Telegram-2CA5E0?style=for-the-badge&logo=telegram)](https://telegram.org/)
 [![License: CC BY-NC-ND 4.0](https://img.shields.io/badge/License-CC%20BY--NC--ND%204.0-lightgrey.svg?style=for-the-badge)](https://creativecommons.org/licenses/by-nc-nd/4.0/)
 
-This is an advanced, feature-rich Telegram bot built with Python and `pyTelegramBotAPI`. It provides robust file and post sharing, a unique redeem code/giveaway system, dynamic multi-admin controls, and a modern force-subscription system—all powered by a persistent MongoDB database backend for permanent data storage.
+This is an advanced, feature-rich Telegram bot built with Python and `pyTelegramBotAPI`. It provides robust file, post, and batch sharing, a unique redeem code/giveaway system, dynamic multi-admin controls, and a modern force-subscription system—all powered by a persistent MongoDB database backend for permanent data storage.
 
 This project has been significantly upgraded to be a scalable and professional application suitable for cloud deployment.
 
 ## ✨ Key Features
 
 * **Persistent Database**: Uses MongoDB Atlas to ensure no data (users, files, posts, codes) is ever lost on server restarts.
-* **Two Ways to Share**:
+* **Three Ways to Share**:
     * **File Uploads**: Upload any media (video, photo, document, audio) to get a permanent, shareable link.
     * **Forward any Post**: Forward any message or post—with text, media, or buttons—to get a shareable link for it.
+    * **Batch Link Creation**: Admins can generate a single link for a sequential range of posts from the storage channel, perfect for sharing multi-part content or entire collections at once.
 * **Anonymous & Direct Delivery**: All files and posts are delivered as fresh copies, completely removing the "Forwarded from" tag to protect privacy. Users who click a link get the content directly from the bot.
 * **Full-Featured Admin Panel**: Admins get a powerful dashboard with buttons to:
     * 📊 View Bot Statistics (user count, bot status).
@@ -22,6 +23,7 @@ This project has been significantly upgraded to be a scalable and professional a
     * 📢 Broadcast text messages to all users.
     * 📤 Forward a message as a broadcast to all users.
     * 🚦 Toggle the bot's status On/Off.
+* **Interactive Support System**: Users can send messages to support, and the bot owner receives them with a "Reply" button to answer directly through the bot.
 * **Advanced Redeem Code System**:
     * **Single-Use & Limited-Use Codes**: Create codes for prizes (files or text) that can be redeemed a specific number of times.
     * **Code Pools**: Create a single code that gives a different prize from a predefined list to each user who redeems it (perfect for giveaways).
@@ -59,17 +61,18 @@ While most actions are handled by buttons, several slash commands are available 
 * `/redeem`: Same as the "Redeem Code" button.
 
 #### For Admins Only
-* `/panel`: Shows the admin panel with management buttons.
+* `/batch`: Starts the process to create a shareable link for a range of messages.
 * `/createcode`: Starts the process of creating a new redeem code.
 * `/createpool`: Starts the process of creating a new code pool for giveaways.
 * `/listadmins`: Shows a list of all current bot admins.
-* `/addforcesub`: Add a channel to the force subscription list.
-* `/removeforcesub`: Remove a channel from the force subscription list.
-* `/listforcesub`: List all force subscription channels.
+* `/panel`: Shows the admin panel with management buttons.
 
 #### For the Bot Owner Only
 * `/addadmin <user_id>`: Promotes a user to an admin.
 * `/removeadmin <user_id>`: Removes an admin's privileges.
+* `/addforcesub <channel_id>`: Add a channel to the force subscription list.
+* `/removeforcesub <channel_id>`: Remove a channel from the force subscription list.
+* `/listforcesub`: List all force subscription channels.
 * `/set_delete_timer`: Set the auto-delete timer for sent files/messages.
 * `/check_delete_timer`: Check the current auto-delete timer setting.
 
