@@ -813,7 +813,10 @@ def forward_button_handler(message):
     send_message(message.chat.id, lang_data["forward_request_message"], reply_markup=back_keyboard(get_user_lang_code(user_id)))
     set_state(user_id, "awaiting_forward")
 
-@bot.message_handler(func=lambda message: get_state(message.from_user.id) == "awaiting_forward")
+@bot.message_handler(
+    content_types=['text', 'photo', 'video', 'document', 'audio', 'sticker', 'voice', 'video_note', 'location', 'contact'],
+    func=lambda message: get_state(message.from_user.id) == "awaiting_forward"
+)
 def forwarded_message_receiver(message):
     if not force_sub_check(message):
         return
