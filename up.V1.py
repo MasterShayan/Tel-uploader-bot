@@ -357,7 +357,6 @@ def start_command_handler(message):
     user_id = message.from_user.id
     lang_data = get_user_lang(user_id)
     
-    # Check if the start command has a payload (e.g., from a share link)
     if len(message.text.split()) > 1 and message.text.split()[1].startswith('getfile_'):
         try:
             file_info = message.text.split(' ')[1].replace('getfile_', '')
@@ -365,20 +364,27 @@ def start_command_handler(message):
             file_doc = files_collection.find_one({'_id': int(global_file_id)})
             
             if file_doc and file_doc.get("token") == token:
-                # Check if it's a 'post' or a media file
-                if file_doc.get('file_type') == 'post':
-                    bot.copy_message(message.chat.id, STORAGE_GROUP_ID, file_doc['message_id_in_storage'])
-                    send_confirmation_disclaimer(message.chat.id)
+                file_type = file_doc.get('file_type')
+                
+                if file_type == 'batch':
+                    start_id = file_doc['start_message_id']
+                    end_id = file_doc['end_message_id']
+                    for msg_id in range(start_id, end_id + 1):
+                        bot.copy_message(user_id, STORAGE_GROUP_ID, msg_id)
+                        time.sleep(0.3) # To avoid Telegram's rate limits
+                    send_message(user_id, "✅ Batch delivery complete!")
+                elif file_type == 'post':
+                    bot.copy_message(user_id, STORAGE_GROUP_ID, file_doc['message_id_in_storage'])
+                    send_confirmation_disclaimer(user_id)
                 else: # It's a regular file
-                    send_file_by_id(message.chat.id, file_doc["file_type"], file_doc["file_id"])
-                    send_confirmation_disclaimer(message.chat.id)
+                    send_file_by_id(user_id, file_doc["file_type"], file_doc["file_id"])
+                    send_confirmation_disclaimer(user_id)
             else:
-                send_message(message.chat.id, lang_data["download_link_error"])
+                send_message(user_id, lang_data["download_link_error"])
         except Exception as e:
             print(f"Error in getfile link: {e}")
-            send_message(message.chat.id, lang_data["download_link_error"])
+            send_message(user_id, lang_data["download_link_error"])
     else:
-        # Standard /start command
         users_collection.update_one({'_id': user_id}, {'$set': {'username': message.from_user.username, 'first_name': message.from_user.first_name}}, upsert=True)
         send_message(message.chat.id, lang_data["start_message"], reply_markup=main_keyboard(DEFAULT_LANGUAGE))
 
@@ -485,6 +491,75 @@ def admin_broadcast_receiver(message):
     report = lang_data["admin_broadcast_report"].format(success_count=success_count, fail_count=fail_count)
     send_message(message.chat.id, report, reply_markup=main_keyboard(get_user_lang_code(message.from_user.id)))
     delete_state(message.from_user.id)
+
+@bot.message_handler(commands=['batch'])
+def batch_command_handler(message):
+    """Starts the batch creation process. Admin only."""
+    if not is_admin(message.from_user.id):
+        send_message(message.chat.id, get_user_lang(message.from_user.id)["admin_panel_access_denied"])
+        return
+
+    lang_data = get_user_lang(message.from_user.id)
+    send_message(message.chat.id, lang_data["batch_command_prompt_first"], reply_markup=back_keyboard(get_user_lang_code(message.from_user.id)))
+    set_state(message.from_user.id, "batch_awaiting_first")
+
+@bot.message_handler(
+    content_types=['text', 'photo', 'video', 'document', 'audio', 'sticker', 'voice', 'video_note'],
+    func=lambda message: get_state(message.from_user.id) == "batch_awaiting_first"
+)
+def batch_first_message_handler(message):
+    """Handles the first forwarded message for the batch."""
+    user_id = message.from_user.id
+    lang_data = get_user_lang(user_id)
+
+    if not (message.forward_from_chat and message.forward_from_chat.id == STORAGE_GROUP_ID):
+        send_message(user_id, lang_data["batch_error_not_forward"])
+        delete_state(user_id)
+        return
+
+    first_message_id = message.forward_from_message_id
+    send_message(user_id, lang_data["batch_command_prompt_last"])
+    set_state(user_id, "batch_awaiting_last", data={'first_message_id': first_message_id})
+
+@bot.message_handler(
+    content_types=['text', 'photo', 'video', 'document', 'audio', 'sticker', 'voice', 'video_note'],
+    func=lambda message: get_state(message.from_user.id) == "batch_awaiting_last"
+)
+def batch_last_message_handler(message):
+    """Handles the last forwarded message and creates the batch link."""
+    user_id = message.from_user.id
+    lang_data = get_user_lang(user_id)
+
+    if not (message.forward_from_chat and message.forward_from_chat.id == STORAGE_GROUP_ID):
+        send_message(user_id, lang_data["batch_error_not_forward"])
+        delete_state(user_id)
+        return
+
+    last_message_id = message.forward_from_message_id
+    state_data = get_state_data(user_id)
+    first_message_id = state_data.get('first_message_id')
+
+    # Generate a unique ID and link for the batch
+    global_file_id = get_next_sequence_value('global_file_id')
+    token = ''.join(random.choices(string.ascii_letters + string.digits, k=16))
+
+    # Save batch information to the database
+    file_doc = {
+        '_id': global_file_id,
+        'uploader_id': user_id,
+        'file_type': 'batch',  # A new type to identify a range of messages
+        'start_message_id': first_message_id,
+        'end_message_id': last_message_id,
+        'token': token,
+        'created_at': datetime.now(timezone.utc)
+    }
+    files_collection.insert_one(file_doc)
+    
+    # Create the shareable link (uses the same format for simplicity)
+    share_link = f"https://t.me/{bot.get_me().username}?start=getfile_{global_file_id}_{token}"
+    
+    send_message(message.chat.id, lang_data["batch_success"].format(share_link=share_link), reply_markup=main_keyboard(get_user_lang_code(user_id)))
+    delete_state(user_id)
 
 @bot.message_handler(func=lambda message: is_admin(message.from_user.id) and message.text == get_user_lang(message.from_user.id)["admin_forward_broadcast_button"])
 def admin_forward_broadcast_handler(message):
@@ -1019,8 +1094,16 @@ def get_file_by_id_handler(message):
         
     file_doc = files_collection.find_one({'_id': int(file_id_to_get)})
     if file_doc:
-        # Check if it's a 'post' or a media file
-        if file_doc.get('file_type') == 'post':
+        file_type = file_doc.get('file_type')
+
+        if file_type == 'batch':
+            start_id = file_doc['start_message_id']
+            end_id = file_doc['end_message_id']
+            for msg_id in range(start_id, end_id + 1):
+                bot.copy_message(user_id, STORAGE_GROUP_ID, msg_id)
+                time.sleep(0.3) # To avoid Telegram's rate limits
+            send_message(user_id, "✅ Batch delivery complete!")
+        elif file_type == 'post':
             bot.copy_message(user_id, STORAGE_GROUP_ID, file_doc['message_id_in_storage'])
             send_confirmation_disclaimer(user_id)
         else: # It's a regular file
