@@ -1,6 +1,10 @@
 {
     "start_message": "👋 Welcome to the Uploader Bot!\n\n📥 Upload your media to get a download link.",
     "upload_button": "☁️ Upload Media ☁️",
+    "forward_button": "➡️ Forward Post",
+    "forward_request_message": "➡️ You may now forward any post to me.",
+    "forward_success_message": "✅ Post saved successfully!\n\n🔗 Share link:\n{share_link}",
+    "forward_link_error": "❌ Invalid post link or the post has been deleted.",
     "caption_button": "♻️ Caption",
     "delete_button": "🗑 Delete File",
     "support_button": "Support 🗣",
